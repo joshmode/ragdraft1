@@ -1,0 +1,22 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+PyMuPDF
+easyocr
+pdf2image
+Pillow
+numpy
+chromadb>=0.6.0
+sentence-transformers>=3.0.0
+google-genai
+anthropic>=0.28.0
+openai
+requests
+python-dotenv
+markdown-pdf
+python-docx
+odfpy
+gunicorn
+beautifulsoup4
+lxml
+flask

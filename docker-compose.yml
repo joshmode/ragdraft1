@@ -1,0 +1,50 @@
+services:
+  engine:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ALLOW_LOCAL_KEY_WRITE: "true"
+      LOCAL_ENV_PATH: /app/data/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: development
+      API_PORT: "3000"
+      ENGINE_URL: http://engine:5001
+      FRONTEND_URL: http://localhost:3000
+      ALLOW_MENTOR_REGISTRATION: "true"
+      ALLOW_LOCAL_PROVIDER: "true"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

@@ -1,0 +1,21 @@
+{
+  "name": "ragstoriches-api",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5",
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^11.6.0",
+    "multer": "^2.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "express-validator": "^7.2.0"
+  }
+}

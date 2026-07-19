@@ -1,0 +1,37 @@
+# Web Framework
+streamlit>=1.40.0
+altair
+pandas
+
+# PDF Parsing
+PyMuPDF
+easyocr
+pdf2image
+Pillow
+numpy
+
+# Chromadb
+chromadb>=0.6.0
+sentence-transformers>=3.0.0
+
+# LLM Providers
+google-genai
+anthropic>=0.28.0
+openai
+requests
+
+# Environment Management
+python-dotenv
+markdown-pdf
+python-docx
+odfpy
+gunicorn
+
+# Scraper, Database & Auth
+beautifulsoup4
+lxml
+playwright
+bcrypt
+sqlalchemy
+flask
+flask-cors
