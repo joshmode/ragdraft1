@@ -1,14 +1,7 @@
 import crypto from "crypto"
 import { getDb } from "./db.js"
 
-// Every user's own key is decrypted fresh, per request, from their own row
-// in user_api_keys — it is never written into a shared file or a process
-// env var, which is exactly the bug this replaces: the old /save-api-key
-// flow overwrote one shared os.environ value for every visitor at once, so
-// whichever user saved a key last silently became the key everyone's
-// requests used. Encryption at rest (AES-256-GCM) means a DB leak alone
-// doesn't leak keys — you'd also need KEY_ENCRYPTION_SECRET, which only
-// lives in server env, never in the database.
+// per-user keys, decrypted fresh per request from their own row - never a shared file/env var
 const ALGO = "aes-256-gcm"
 
 const KEY_ENCRYPTION_SECRET = process.env.KEY_ENCRYPTION_SECRET ||
@@ -18,8 +11,7 @@ if (!KEY_ENCRYPTION_SECRET) {
     throw new Error("KEY_ENCRYPTION_SECRET is required in production to store user API keys.")
 }
 
-// AES-256-GCM needs a 32-byte key; hash the configured secret down to that
-// length regardless of how long/short the operator's raw secret is.
+// hash down to 32 bytes for AES-256 regardless of secret length
 const MASTER_KEY = crypto.createHash("sha256").update(KEY_ENCRYPTION_SECRET).digest()
 
 export const BYOK_PROVIDERS = new Set(["gemini", "claude", "chatgpt"])
@@ -79,16 +71,10 @@ class ProviderResolutionError extends Error {
     }
 }
 
-// Single place that turns a UI-facing provider choice into what the engine
-// actually needs to make the call: the internal provider name, and (for
-// BYOK providers) that one user's own decrypted key. The returned apiKey
-// must only ever be used to build the outbound engine request — never
-// logged, never stored, never echoed back to any client.
+// turns a UI provider choice into what the engine needs, incl the user's own byok key
 export function resolveProviderForRequest(userId, providerChoice) {
     if (providerChoice === "default") {
-        // pooled free tier — always the operator's own Groq key, held as a
-        // normal env var on the engine, never a per-user secret.
-        return { engineProvider: "groq", apiKey: "" }
+        return { engineProvider: "groq", apiKey: "" } // pooled key, lives on the engine's own env
     }
     if (providerChoice === "local") {
         return { engineProvider: "local", apiKey: "" }

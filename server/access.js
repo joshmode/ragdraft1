@@ -24,10 +24,7 @@ export function canAccessAnalysis(analysisId, user) {
     `).get(analysisId, user.id)
 }
 
-// The mentor <-> candidate trust relationship is session membership: a mentor
-// may see a candidate's data only while that candidate is a participant in
-// one of the mentor's review sessions. Returns the linking session row (or
-// undefined), so callers can also record which session authorised an action.
+// mentor <-> candidate trust = session membership, only see candidates in your own sessions
 export function mentorSessionForCandidate(mentorId, candidateId, { activeOnly = true } = {}) {
     return getDb().prepare(`
         SELECT rs.id, rs.session_code, rs.active

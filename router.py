@@ -11,8 +11,7 @@ _PLACEHOLDER_VALS = {
     "insert_key_here", "placeholder",
 }
 
-# "default" is the free pooled tier and always resolves to Groq server-side —
-# it is never a legal value passed all the way down here.
+# "default" resolves to groq server-side before it ever reaches here
 _PROVIDER_LIMITS = {
     "gemini": int(os.environ.get("GEMINI_MAX_CONCURRENCY", "4")),
     "claude": int(os.environ.get("CLAUDE_MAX_CONCURRENCY", "3")),
@@ -25,9 +24,7 @@ _PROVIDER_LOCKS = {
     for provider, limit in _PROVIDER_LIMITS.items()
 }
 
-# Default model per provider — deliberately env-overridable rather than
-# hardcoded, since exact model IDs drift as providers release new versions.
-# Verify these against each provider's current docs before relying on them.
+# env-overridable since exact model IDs drift, check these against current provider docs
 _DEFAULT_MODELS = {
     "gemini":  os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
     "claude":  os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
@@ -58,9 +55,7 @@ def _default_local_endpoint() -> str:
 
 
 def _resolve_key(provider: str, env_var: str, api_key: str) -> str:
-    """a caller-supplied key (per-user BYOK) always wins over the operator's
-    pooled env var — this is what keeps concurrent users' keys isolated,
-    since nothing here is ever written back into process-wide state."""
+    """caller-supplied key wins over the pooled env var, keeps concurrent users isolated"""
     key = (api_key or "").strip() or os.environ.get(env_var, "")
     if not key or _is_key_placeholder(key):
         raise EnvironmentError(f"No {provider} API key available. Add your own key, or use Default (Free).")
@@ -78,13 +73,7 @@ def llm_call(
     timeout: int = 120,
     api_key: str = "",
 ) -> str:
-    """routes prompt to chosen llm.
-
-    api_key, when provided, is a specific user's own key for this single
-    call — it is used only for this request and never touches os.environ or
-    any shared/global state, so concurrent users on different providers (or
-    different keys for the same provider) never interfere with each other.
-    """
+    """routes prompt to chosen llm. api_key, if given, is used only for this one call - never touches os.environ"""
     provider = provider.lower()
     last_err = None
 
@@ -157,10 +146,7 @@ def llm_call(
                     return res.choices[0].message.content
 
                 elif provider == "groq":
-                    # Groq's API is OpenAI-compatible, so the openai SDK works
-                    # unchanged against a different base_url — no new
-                    # dependency. This is always the pooled/operator key
-                    # (Default/Free tier), never a per-user BYOK key.
+                    # groq's api is openai-compatible, reuse the sdk with a different base_url
                     import openai
                     key = _resolve_key("Groq", "GROQ_API_KEY", api_key)
                     mdl = model or _DEFAULT_MODELS["groq"]
@@ -195,10 +181,7 @@ def llm_call(
             last_err = e
             err_str = str(e).lower()
             if attempt < max_retries - 1:
-                # exponential backoff with jitter — jitter spreads out retries
-                # from concurrent requests so they don't all land on the
-                # provider in the same instant and immediately re-trip the
-                # rate limit that caused the retry in the first place.
+                # jitter spreads concurrent retries out so they don't all re-trip the limit together
                 if any(x in err_str for x in ["429", "too many requests", "quota"]):
                     time.sleep(min(60, 4 * (2 ** attempt)) + random.uniform(0, 1))
                     continue

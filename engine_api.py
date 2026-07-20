@@ -33,8 +33,7 @@ import feedback
 
 app = Flask(__name__)
 
-# reject oversized request bodies before they're fully buffered/parsed —
-# 25MB file limit plus base64 (~33%) and JSON framing overhead.
+# 25MB file limit plus base64/json overhead, reject oversized bodies before buffering
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
 
@@ -233,11 +232,7 @@ def compare_endpoint():
 
 @app.route("/env-status", methods=["GET"])
 def env_status():
-    # Per-user BYOK keys (gemini/claude/chatgpt) live encrypted in the
-    # Express server's database now, not here — this only reports the
-    # engine's own operator-level pooled secrets (the free/default tier and
-    # LinkedIn OAuth), which are still ordinary env vars since they're
-    # genuinely shared across every visitor by design.
+    # per-user byok keys live encrypted in the express db now, this is just the pooled secrets
     _load_env()
     groq_key = os.environ.get("GROQ_API_KEY", "")
     li_id = os.environ.get("LINKEDIN_CLIENT_ID", "")

@@ -65,9 +65,7 @@ _JD_HEADER_RE = re.compile(
 
 
 def _element_to_text(el) -> str:
-    """walk an element and emit structured text: list items become bullets,
-    headings/bold-only lines become spaced section headers, paragraphs stay
-    separated — instead of the flat line soup get_text() produces."""
+    """walk an element into structured text: bullets, headers, paragraphs - not flat line soup"""
     parts: list[str] = []
 
     def is_header_text(text: str) -> bool:
@@ -192,8 +190,7 @@ def _looks_like_authwall(html_text: str, final_url: str = "") -> bool:
 
 
 def _profile_from_meta(html_text: str) -> dict | None:
-    """public LinkedIn pages served to crawlers expose name/headline via og: meta
-    tags even when the full page is behind the authwall."""
+    """crawlers get name/headline via og: meta tags even behind the authwall"""
     if not BS4_AVAILABLE:
         return None
     soup = BeautifulSoup(html_text, "html.parser")
@@ -213,8 +210,7 @@ def scrape_linkedin_profile(url: str) -> dict:
     if "linkedin.com/in/" not in url.lower():
         return {"error": "That doesn't look like a LinkedIn profile URL (expected linkedin.com/in/...)."}
 
-    # try the plain request first — LinkedIn serves crawler-visible og: meta
-    # tags for public profiles, which is the most reliable anonymous signal.
+    # plain request first - linkedin serves crawler-visible og: meta tags for public profiles
     html_text = ""
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=15, allow_redirects=True)
@@ -243,8 +239,7 @@ def scrape_linkedin_profile(url: str) -> dict:
         except Exception:
             pass
 
-    # if we got any meta at all (even behind the authwall LinkedIn often
-    # still includes og: tags), surface it rather than a bare failure.
+    # linkedin often includes og: tags even behind the authwall, use them if present
     if html_text:
         meta = _profile_from_meta(html_text)
         if meta:

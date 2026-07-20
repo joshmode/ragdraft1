@@ -27,17 +27,11 @@ const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:5001"
 
 getDb()
 
-// Required for correct client IPs (rate limiting) and secure-cookie/HTTPS
-// detection once this sits behind a reverse proxy or load balancer, which
-// is the normal topology for a publicly hosted deployment.
+// needed for correct client IPs / secure cookies behind a reverse proxy
 app.set("trust proxy", 1)
 
 app.use(helmet({
-    // the client is a same-origin SPA bundle served by this same process;
-    // a strict default CSP would block its own inline-free Vite build, so
-    // keep helmet's other protections (frameguard, HSTS, etc.) and only
-    // relax CSP if you later add a nonce-based policy for the bundle.
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: false, // client is a same-origin SPA bundle, default CSP would block it
 }))
 
 const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
@@ -55,9 +49,7 @@ app.use(cors({
 }))
 app.use(express.json({ limit: "50mb" }))
 
-// express.json() throws a SyntaxError for malformed bodies; without this it
-// falls through to Express's default HTML error page, which breaks every
-// frontend call site that expects `err.response.data.error` to be JSON.
+// express.json() throws SyntaxError on malformed bodies, keep the response JSON
 app.use((err, _req, res, next) => {
     if (err?.type === "entity.parse.failed" || err instanceof SyntaxError) {
         return res.status(400).json({ error: "Malformed JSON in request body." })
@@ -82,8 +74,7 @@ app.use("/api/scrape", scraperRoutes)
 app.use("/api/settings", settingsRoutes)
 app.use("/api/feedback", feedbackRoutes)
 
-// any /api/* route that wasn't matched above should stay JSON, not fall
-// through to the SPA's index.html catch-all below.
+// unmatched /api/* routes stay JSON instead of falling through to the SPA catch-all
 app.use("/api", (_req, res) => {
     res.status(404).json({ error: "Not found." })
 })
@@ -94,9 +85,7 @@ app.get("*", (_req, res) => {
     res.sendFile(path.join(clientDist, "index.html"))
 })
 
-// final safety net: any error passed via next(err), or thrown synchronously
-// in a route we didn't wrap in try/catch, still gets a JSON response
-// instead of crashing the process or leaking an HTML stack trace.
+// final safety net so an uncaught error is still a JSON response, not a crash
 app.use((err, _req, res, _next) => {
     if (err?.message === "Not allowed by CORS") {
         return res.status(403).json({ error: "This origin is not permitted to access the API." })

@@ -8,14 +8,7 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-// Wraps a call to the Python engine (analyse / gen-cv / gen-cover-letter /
-// compare-resume-jd — the endpoints that fan out to a paid LLM provider) with
-// exponential backoff + jitter on 429. The engine already retries individual
-// LLM calls internally (router.py); this catches the case where an entire
-// analysis exhausts those retries and the engine reports a 429 back to us —
-// retrying the whole job once or twice with backoff is usually enough to
-// ride out a transient provider rate limit without the user having to
-// manually click "Analyse" again.
+// retries a whole engine call with backoff+jitter on 429, on top of router.py's own per-call retries
 export async function fetchEngineWithRetry(url, options, attempt = 0) {
     const res = await fetch(url, options)
 

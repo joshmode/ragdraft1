@@ -13,10 +13,7 @@ const router = Router()
 const ANALYSIS_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
 const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
-// Re-running the exact same resume + job description + provider/model +
-// critic setting produces the exact same result, so we key a short-lived
-// cache on all of it — re-clicking "Analyse" without changing anything skips
-// the LLM entirely instead of burning API quota on identical output.
+// same resume+jd+provider+critic = same result, so cache on it and skip the LLM
 function analysisContentHash({ resumeId, jobDescription, provider, model, useCritic }) {
     return crypto.createHash("sha256")
         .update(`${resumeId}|${provider || ""}|${model || ""}|${useCritic ? "1" : "0"}|${jobDescription || ""}`)
@@ -80,9 +77,7 @@ async function processAnalysis(engineUrl, jobId, payload) {
     const db = getDb()
     db.prepare("UPDATE analysis_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(jobId)
     try {
-        // Resolved fresh here, right before the outbound call, and never
-        // stored anywhere: payload (persisted in analysis_jobs.request_json)
-        // never carries the decrypted key, only the user's provider choice.
+        // resolved fresh here, never stored - request_json only ever holds the provider choice
         const { engineProvider, apiKey } = resolveProviderForRequest(payload.user_id, payload.provider)
         const enginePayload = {
             resume_json: payload.resume_json,
@@ -93,11 +88,6 @@ async function processAnalysis(engineUrl, jobId, payload) {
             api_key: apiKey,
         }
 
-        // fetchEngineWithRetry rides out a transient provider rate limit (the
-        // engine already retries individual LLM calls internally — this
-        // covers the case where the whole analysis exhausts those retries)
-        // with exponential backoff + jitter, so a busy provider doesn't fail
-        // the job outright and force the user to manually retry.
         const analyseRes = await fetchEngineWithRetry(`${engineUrl}/analyse`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -143,9 +133,7 @@ router.post("/run", authenticateToken, (req, res) => {
     if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
         return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
     }
-    // fail fast, synchronously, if a BYOK provider has no key saved yet —
-    // otherwise the job would queue, run in the background, and only then
-    // fail with a much less obvious error.
+    // fail fast if a BYOK provider has no key, instead of queueing and failing later
     try {
         resolveProviderForRequest(req.user.id, provider)
     } catch (err) {

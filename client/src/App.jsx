@@ -4,8 +4,7 @@ import ReactMarkdown from "react-markdown"
 import api from "./api/client"
 import { useAuth } from "./context/AuthContext"
 
-// Model choice is fixed per provider on the server now (always "latest") —
-// the UI only ever picks a provider, not a specific model.
+// model is fixed per provider server-side now, UI only picks the provider
 const PROVIDER_OPTIONS = [
     { key: "default", label: "Default (Free)", byok: false },
     { key: "gemini", label: "Gemini (Own Key)", byok: true },
@@ -29,6 +28,19 @@ function getError(err) {
     return err.response?.data?.error || err.message || "Something went wrong."
 }
 
+// blob-typed requests get error responses back as a Blob too, decode it for the real message
+async function getBlobError(err) {
+    const data = err.response?.data
+    if (data instanceof Blob && data.type.includes("json")) {
+        try {
+            return JSON.parse(await data.text()).error || getError(err)
+        } catch {
+            return getError(err)
+        }
+    }
+    return getError(err)
+}
+
 function fileToBase64(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -49,9 +61,7 @@ function waitForAnalysis(jobId) {
                 if (response.data.status === "failed") return reject(new Error(response.data.error || "Analysis failed."))
                 if (Date.now() >= deadline) return reject(new Error("Analysis timed out."))
                 attempts += 1
-                // batched analysis usually finishes within seconds, so poll
-                // quickly at first — then back off to cut sustained request
-                // volume for the rare slow job instead of hammering every 1s
+                // poll fast at first (batched analysis is usually quick), then back off
                 const delay = attempts < 5 ? 1000 : attempts < 15 ? 2000 : 4000
                 window.setTimeout(poll, delay)
             } catch (err) {
@@ -231,9 +241,13 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
     const [annotations, setAnnotations] = useState([])
     const [comment, setComment] = useState("")
     const [pdfUrl, setPdfUrl] = useState("")
+    const [error, setError] = useState("")
     const actionable = useMemo(() => Object.entries(result.rewrites || {}).flatMap(([section, items]) => items.map((item, index) => ({ section, item, index, key: item.id || `${section}_${index}` })).filter(({ item }) => item.framework_used !== "none" && item.framework_used !== "error" && item.original !== item.rewritten)), [result])
     const count = actionable.length
     const current = actionable[Math.min(active, Math.max(count - 1, 0))]
+
+    // reset to the first suggestion on a fresh analysis instead of a stale index
+    useEffect(() => { setActive(0) }, [analysisId])
 
     useEffect(() => {
         if (!analysisId || !current) return
@@ -272,11 +286,16 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
 
     async function save(next) {
         setDecisions(next)
-        if (analysisId) await api.post(`/analysis/${analysisId}/decisions`, { decisions: next })
+        setError("")
+        if (!analysisId) return
+        try {
+            await api.post(`/analysis/${analysisId}/decisions`, { decisions: next })
+        } catch (err) {
+            setError(`Couldn't save your decision: ${getError(err)}`)
+        }
     }
 
-    // deciding on a suggestion advances to the next one automatically, so
-    // reviewing a resume is one decision per click instead of two.
+    // deciding auto-advances to the next suggestion, one click per bullet instead of two
     async function decide(value) {
         if (!current) return
         await save({ ...decisions, [current.key]: value })
@@ -285,15 +304,20 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
 
     async function postComment() {
         if (!comment.trim() || !analysisId || !current) return
-        await api.post("/annotations", { analysis_id: analysisId, suggestion_key: current.key, comment })
-        setComment("")
-        const res = await api.get(`/annotations/${analysisId}`)
-        setAnnotations(res.data.filter(item => item.key === current.key))
+        setError("")
+        try {
+            await api.post("/annotations", { analysis_id: analysisId, suggestion_key: current.key, comment })
+            setComment("")
+            const res = await api.get(`/annotations/${analysisId}`)
+            setAnnotations(res.data.filter(item => item.key === current.key))
+        } catch (err) {
+            setError(`Couldn't post comment: ${getError(err)}`)
+        }
     }
 
     if (!count) return <div className="card muted">No rewrite-worthy sentences were detected. Header and label lines were skipped.</div>
     const state = decisions[current.key]
-    return <><div className="review-toolbar">
+    return <>{error && <p className="error-msg">{error}</p>}<div className="review-toolbar">
         <span className="status-chip">{count} suggested changes</span>
         <span className="status-chip accepted-chip">{Object.values(decisions).filter(v => v).length} accepted</span>
         <span className="status-chip dismissed-chip">{Object.values(decisions).filter(v => v === false).length} dismissed</span>
@@ -391,13 +415,17 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     }
 
     async function downloadExport(kind) {
-        const res = await api.post(`/generate/${kind}`, { text, filename: type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}` }, { responseType: "blob" })
-        const href = URL.createObjectURL(res.data)
-        const link = document.createElement("a")
-        link.href = href
-        link.download = type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}`
-        link.click()
-        URL.revokeObjectURL(href)
+        try {
+            const res = await api.post(`/generate/${kind}`, { text, filename: type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}` }, { responseType: "blob" })
+            const href = URL.createObjectURL(res.data)
+            const link = document.createElement("a")
+            link.href = href
+            link.download = type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}`
+            link.click()
+            URL.revokeObjectURL(href)
+        } catch (err) {
+            setError(`Export failed: ${await getBlobError(err)}`)
+        }
     }
 
     return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">✏️ Edit Your {title}</h3><textarea className="input-field document-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
@@ -411,13 +439,19 @@ function Analytics({ result, history }) {
     const [confidence, setConfidence] = useState("")
     const [comment, setComment] = useState("")
     const [submitted, setSubmitted] = useState(false)
+    const [error, setError] = useState("")
 
     async function submitFeedback() {
-        await api.post("/feedback", { analysis_id: result.analysis_id, consent, confidence, comment })
-        setSubmitted(true)
+        setError("")
+        try {
+            await api.post("/feedback", { analysis_id: result.analysis_id, consent, confidence, comment })
+            setSubmitted(true)
+        } catch (err) {
+            setError(getError(err))
+        }
     }
 
-    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><div className="section-score-grid">{Object.entries(sectionScores).map(([section, data]) => <div className="metric-card card" key={section}><div className="metric-value">{data.quality}%</div><div className="metric-label">{section}</div></div>)}</div><h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" /><button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
+    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><div className="section-score-grid">{Object.entries(sectionScores).map(([section, data]) => <div className="metric-card card" key={section}><div className="metric-value">{data.quality}%</div><div className="metric-label">{section}</div></div>)}</div><h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
 }
 
 function DiffView({ diff }) {
@@ -801,8 +835,7 @@ function App() {
             setAnalysisId(completed.analysis_id)
             setDecisions({})
             setView("Rewrite Suggestions")
-            // restore any previously generated documents for this analysis so
-            // navigating between tabs never wipes the CV / cover letter.
+            // restore any docs already generated for this analysis so tabs don't wipe them
             try {
                 const docsRes = await api.get(`/generate/latest?analysis_id=${completed.analysis_id}`)
                 setDocs({
@@ -818,8 +851,7 @@ function App() {
     if (!user) return <AuthPage />
     const isMentor = user.role === "mentor"
 
-    // Mentors get their workspace as the landing page — they review other
-    // people's resumes, so the upload-and-analyse flow is secondary for them.
+    // mentors land in their workspace - they review others' resumes, not their own
     if (isMentor) {
         return <main className="app-container">
             <Hero />
