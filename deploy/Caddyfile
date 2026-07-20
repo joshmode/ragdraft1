@@ -1,0 +1,7 @@
+# Caddy terminates HTTPS with automatic Let's Encrypt certificates and
+# forwards everything to the Express API (which serves the SPA + /api).
+# DOMAIN comes from the environment (set it in .env or the shell).
+{$DOMAIN} {
+	encode gzip zstd
+	reverse_proxy api:3000
+}

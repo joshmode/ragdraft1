@@ -143,6 +143,28 @@ function initDb(db) {
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (analysis_id) REFERENCES analyses(id)
         );
+        CREATE TABLE IF NOT EXISTS mentor_feedback (
+            id INTEGER PRIMARY KEY,
+            session_id INTEGER NOT NULL,
+            mentor_id INTEGER NOT NULL,
+            candidate_id INTEGER NOT NULL,
+            analysis_id INTEGER,
+            suggestion_key TEXT DEFAULT '',
+            feedback_type TEXT NOT NULL DEFAULT 'comment',
+            section TEXT DEFAULT '',
+            original_text TEXT DEFAULT '',
+            suggested_text TEXT DEFAULT '',
+            comment TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES review_sessions(id),
+            FOREIGN KEY (mentor_id) REFERENCES users(id),
+            FOREIGN KEY (candidate_id) REFERENCES users(id),
+            FOREIGN KEY (analysis_id) REFERENCES analyses(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mentor_feedback_candidate ON mentor_feedback(candidate_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mentor_feedback_mentor ON mentor_feedback(mentor_id);
     `)
 
     // CREATE TABLE IF NOT EXISTS above is a no-op on a database that already

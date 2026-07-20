@@ -55,6 +55,76 @@ def _safe_public_url(url: str) -> bool:
         return False
 
 
+_JD_HEADER_RE = re.compile(
+    r'^(about|responsibilities|requirements|qualifications|what you.ll do|'
+    r'what we.re looking for|who you are|benefits|perks|nice to have|'
+    r'preferred|minimum|required skills|role|the role|your (role|impact|team)|'
+    r'compensation|salary|what we offer|why join|our (team|culture|mission))\b',
+    re.IGNORECASE,
+)
+
+
+def _element_to_text(el) -> str:
+    """walk an element and emit structured text: list items become bullets,
+    headings/bold-only lines become spaced section headers, paragraphs stay
+    separated — instead of the flat line soup get_text() produces."""
+    parts: list[str] = []
+
+    def is_header_text(text: str) -> bool:
+        words = text.split()
+        if len(words) > 8 or re.search(r'[.!?]\s*$', text):
+            return False
+        if text.endswith(":") and len(words) <= 4:
+            return True
+        return bool(_JD_HEADER_RE.match(text) and len(words) <= 5) or text.rstrip(":").isupper()
+
+    def walk(node):
+        name = getattr(node, "name", None)
+        if name is None:
+            return
+        if name in ("script", "style", "nav", "noscript"):
+            return
+        if name == "li":
+            text = " ".join(node.get_text(" ", strip=True).split())
+            if text:
+                parts.append(f"- {text}")
+            return
+        if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            text = " ".join(node.get_text(" ", strip=True).split())
+            if text:
+                parts.append("")
+                parts.append(text.upper() if len(text) < 60 else text)
+                parts.append("")
+            return
+        if name in ("p", "div", "section", "span", "strong", "b"):
+            children = [c for c in node.children if getattr(c, "name", None) in
+                        ("p", "div", "ul", "ol", "li", "section", "h1", "h2", "h3", "h4", "h5", "h6", "br", "strong", "b", "span")]
+            if not children or all(getattr(c, "name", None) in ("br", "strong", "b", "span") for c in children):
+                text = " ".join(node.get_text(" ", strip=True).split())
+                if text:
+                    if is_header_text(text):
+                        parts.append("")
+                        parts.append(text.rstrip(":").upper() if len(text) < 60 else text)
+                        parts.append("")
+                    else:
+                        parts.append(text)
+                return
+        for child in getattr(node, "children", []):
+            walk(child)
+
+    walk(el)
+
+    # collapse duplicate consecutive lines and 3+ blank runs
+    out: list[str] = []
+    for line in parts:
+        if line == "" and out and out[-1] == "":
+            continue
+        if line and out and out[-1] == line:
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def _extract_jd_from_html(html_text: str) -> str:
     if not BS4_AVAILABLE:
         text = re.sub(r'<[^>]+>', ' ', html_text)
@@ -65,13 +135,13 @@ def _extract_jd_from_html(html_text: str) -> str:
     for sel in _JD_SELECTORS:
         el = soup.select_one(sel)
         if el and len(el.get_text(strip=True)) > 100:
-            return el.get_text("\n", strip=True)
+            return _element_to_text(el)
 
     for tag in soup(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
 
     main = soup.find("main") or soup.find("body") or soup
-    return main.get_text("\n", strip=True)[:5000]
+    return _element_to_text(main)[:8000]
 
 
 def scrape_jd(url: str) -> str:
@@ -104,41 +174,83 @@ def scrape_jd(url: str) -> str:
     return "Could not extract job description from this URL. Try pasting the description manually."
 
 
+_LINKEDIN_ZIP_HINT = (
+    "LinkedIn requires sign-in to view profiles, so public URL scraping is blocked by "
+    "LinkedIn itself. Instead, download your data export from LinkedIn "
+    "(Settings → Data privacy → Get a copy of your data → choose the ZIP archive) and "
+    "upload that ZIP through the main resume upload box — it imports your positions, "
+    "education, and skills directly."
+)
+
+
+def _looks_like_authwall(html_text: str, final_url: str = "") -> bool:
+    lowered = (final_url or "").lower()
+    if "authwall" in lowered or "/login" in lowered or "signup" in lowered:
+        return True
+    sample = html_text[:20000].lower()
+    return "authwall" in sample or "join linkedin" in sample or "sign in to view" in sample
+
+
+def _profile_from_meta(html_text: str) -> dict | None:
+    """public LinkedIn pages served to crawlers expose name/headline via og: meta
+    tags even when the full page is behind the authwall."""
+    if not BS4_AVAILABLE:
+        return None
+    soup = BeautifulSoup(html_text, "html.parser")
+    title = soup.find("meta", property="og:title")
+    desc = soup.find("meta", property="og:description")
+    name = (title.get("content", "") if title else "").split(" - ")[0].split(" | ")[0].strip()
+    headline = (desc.get("content", "") if desc else "").strip()
+    if not name:
+        return None
+    return {"name": name, "headline": headline, "summary": "", "experience": [], "education": [], "skills": [],
+            "note": "Only the public preview (name and headline) is available without signing in. " + _LINKEDIN_ZIP_HINT}
+
+
 def scrape_linkedin_profile(url: str) -> dict:
     if not _safe_public_url(url):
         return {"error": "Only public HTTPS profile URLs are supported."}
-    if not PLAYWRIGHT_AVAILABLE:
-        return {"error": "Playwright is required for LinkedIn scraping. Run: pip install playwright && playwright install chromium"}
+    if "linkedin.com/in/" not in url.lower():
+        return {"error": "That doesn't look like a LinkedIn profile URL (expected linkedin.com/in/...)."}
 
+    # try the plain request first — LinkedIn serves crawler-visible og: meta
+    # tags for public profiles, which is the most reliable anonymous signal.
+    html_text = ""
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(4000)
+        resp = requests.get(url, headers=_HEADERS, timeout=15, allow_redirects=True)
+        html_text = resp.text
+        if not _looks_like_authwall(html_text, str(resp.url)):
+            meta = _profile_from_meta(html_text)
+            if meta:
+                return meta
+    except Exception:
+        pass
 
-            profile = {"name": "", "headline": "", "summary": "", "experience": [], "education": [], "skills": []}
+    if PLAYWRIGHT_AVAILABLE:
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(3000)
+                content = page.content()
+                final_url = page.url
+                browser.close()
+                if not _looks_like_authwall(content, final_url):
+                    meta = _profile_from_meta(content)
+                    if meta:
+                        return meta
+        except Exception:
+            pass
 
-            try:
-                profile["name"] = page.locator("h1").first.inner_text(timeout=3000)
-            except Exception:
-                pass
+    # if we got any meta at all (even behind the authwall LinkedIn often
+    # still includes og: tags), surface it rather than a bare failure.
+    if html_text:
+        meta = _profile_from_meta(html_text)
+        if meta:
+            return meta
 
-            try:
-                profile["headline"] = page.locator(".text-body-medium").first.inner_text(timeout=3000)
-            except Exception:
-                pass
-
-            try:
-                summary_el = page.locator("[data-section='summary']").first
-                profile["summary"] = summary_el.inner_text(timeout=3000)
-            except Exception:
-                pass
-
-            browser.close()
-            return profile
-    except Exception as e:
-        return {"error": f"LinkedIn scraping failed: {e}"}
+    return {"error": _LINKEDIN_ZIP_HINT}
 
 
 def linkedin_oauth_url(client_id: str, redirect_uri: str) -> str:
