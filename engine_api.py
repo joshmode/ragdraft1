@@ -37,8 +37,6 @@ app = Flask(__name__)
 # 25MB file limit plus base64 (~33%) and JSON framing overhead.
 app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 
-_KEY_NAMES = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "chatgpt": "OPENAI_API_KEY"}
-
 
 @app.errorhandler(HTTPException)
 def _handle_http_exception(e: HTTPException):
@@ -108,6 +106,7 @@ def analyse_endpoint():
     model = data.get("model", "")
     use_critic = data.get("use_critic", False)
     local_endpoint = data.get("local_endpoint", "")
+    api_key = data.get("api_key", "")
 
     results = analyse(
         resume=resume,
@@ -116,6 +115,7 @@ def analyse_endpoint():
         local_endpoint=local_endpoint,
         use_critic=use_critic,
         model=model,
+        api_key=api_key,
     )
     results.pop("parsed_resume_obj", None)
     return jsonify(results)
@@ -130,6 +130,7 @@ def gen_cv_endpoint():
     provider = data.get("provider", "gemini")
     model = data.get("model", "")
     local_endpoint = data.get("local_endpoint", "")
+    api_key = data.get("api_key", "")
     suggestions = data.get("rewrite_suggestions", None)
     decisions = data.get("rewrite_decisions", None)
 
@@ -138,6 +139,7 @@ def gen_cv_endpoint():
         rewrite_suggestions=suggestions,
         rewrite_decisions=decisions,
         model=model,
+        api_key=api_key,
     )
     return jsonify({"cv_text": cv_text})
 
@@ -150,8 +152,9 @@ def gen_cover_letter_endpoint():
     provider = data.get("provider", "gemini")
     model = data.get("model", "")
     local_endpoint = data.get("local_endpoint", "")
+    api_key = data.get("api_key", "")
 
-    cl_text = gen_cover_letter(resume, jd, provider, local_endpoint, model=model)
+    cl_text = gen_cover_letter(resume, jd, provider, local_endpoint, model=model, api_key=api_key)
     return jsonify({"cover_letter_text": cl_text})
 
 
@@ -222,63 +225,27 @@ def compare_endpoint():
     provider = data.get("provider", "gemini")
     model = data.get("model", "")
     local_endpoint = data.get("local_endpoint", "")
+    api_key = data.get("api_key", "")
 
-    result = job_scraper.compare_resume_jd(resume_text, jd_text, provider, local_endpoint, model=model)
+    result = job_scraper.compare_resume_jd(resume_text, jd_text, provider, local_endpoint, model=model, api_key=api_key)
     return jsonify(result)
 
 
 @app.route("/env-status", methods=["GET"])
 def env_status():
+    # Per-user BYOK keys (gemini/claude/chatgpt) live encrypted in the
+    # Express server's database now, not here — this only reports the
+    # engine's own operator-level pooled secrets (the free/default tier and
+    # LinkedIn OAuth), which are still ordinary env vars since they're
+    # genuinely shared across every visitor by design.
     _load_env()
-    status = {}
-    for display, env_var in _KEY_NAMES.items():
-        val = os.environ.get(env_var, "")
-        status[display] = bool(val) and not _is_key_placeholder(val)
-
+    groq_key = os.environ.get("GROQ_API_KEY", "")
     li_id = os.environ.get("LINKEDIN_CLIENT_ID", "")
     li_secret = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
-    status["linkedin"] = bool(li_id) and not _is_key_placeholder(li_id) and bool(li_secret) and not _is_key_placeholder(li_secret)
-    return jsonify(status)
-
-
-@app.route("/save-api-key", methods=["POST"])
-def save_api_key():
-    if os.environ.get("ALLOW_LOCAL_KEY_WRITE", "true").lower() != "true":
-        return jsonify({"ok": False, "error": "Local API key storage is disabled."}), 403
-
-    data = _get_json_body()
-    provider = data.get("provider", "")
-    key = data.get("key", "").strip()
-
-    env_var = _KEY_NAMES.get(provider)
-    if not env_var:
-        return jsonify({"ok": False, "error": "Unknown provider"}), 400
-    if not key:
-        return jsonify({"ok": False, "error": "Key cannot be empty"}), 400
-    if "\n" in key or "\r" in key:
-        return jsonify({"ok": False, "error": "Key contains invalid characters"}), 400
-
-    lines = []
-    key_found = False
-    if os.path.exists(_ENV_PATH):
-        with open(_ENV_PATH, "r") as f:
-            lines = f.readlines()
-
-    new_lines = []
-    for line in lines:
-        if line.strip().startswith(f"{env_var}="):
-            new_lines.append(f"{env_var}={key}\n")
-            key_found = True
-        else:
-            new_lines.append(line)
-    if not key_found:
-        new_lines.append(f"\n{env_var}={key}\n")
-
-    with open(_ENV_PATH, "w") as f:
-        f.writelines(new_lines)
-
-    load_dotenv(_ENV_PATH, override=True)
-    return jsonify({"ok": True})
+    return jsonify({
+        "groq": bool(groq_key) and not _is_key_placeholder(groq_key),
+        "linkedin": bool(li_id) and not _is_key_placeholder(li_id) and bool(li_secret) and not _is_key_placeholder(li_secret),
+    })
 
 
 @app.route("/feedback-status", methods=["GET"])

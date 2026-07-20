@@ -5,28 +5,61 @@ import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
 import { llmLimiter } from "../middleware/rateLimit.js"
+import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
 
 const router = Router()
+const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
-function rejectLocalProvider(req, res) {
-    if (req.body.provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
-        res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
-        return true
+// Resolves the caller's provider choice into what the engine needs (the
+// internal provider name and, for BYOK, that user's own decrypted key) and
+// builds the outbound payload fresh — never forwards req.body verbatim, so
+// a client can't smuggle its own api_key/model fields into the engine call.
+function buildEnginePayload(req, res, extraFields) {
+    const provider = req.body.provider
+    if (!PROVIDER_CHOICES.has(provider)) {
+        res.status(400).json({ error: "Unknown provider." })
+        return null
     }
-    return false
+    if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
+        res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
+        return null
+    }
+    try {
+        const { engineProvider, apiKey } = resolveProviderForRequest(req.user.id, provider)
+        return {
+            resume_json: req.body.resume_json,
+            job_description: req.body.job_description || "",
+            provider: engineProvider,
+            local_endpoint: req.body.local_endpoint || "",
+            api_key: apiKey,
+            ...extraFields,
+        }
+    } catch (err) {
+        if (err instanceof ProviderResolutionError) {
+            res.status(err.status).json({ error: err.message })
+            return null
+        }
+        throw err
+    }
 }
 
 router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
-    if (rejectLocalProvider(req, res)) return
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
     }
+    const enginePayload = buildEnginePayload(req, res, {
+        acc_map: req.body.acc_map || {},
+        rewrite_suggestions: req.body.rewrite_suggestions || null,
+        rewrite_decisions: req.body.rewrite_decisions || null,
+    })
+    if (!enginePayload) return
+
     const engineUrl = req.app.locals.engineUrl
     try {
         const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cv`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(req.body),
+            body: JSON.stringify(enginePayload),
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
@@ -42,16 +75,18 @@ router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
 })
 
 router.post("/cover-letter", llmLimiter, authenticateToken, async (req, res) => {
-    if (rejectLocalProvider(req, res)) return
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
     }
+    const enginePayload = buildEnginePayload(req, res, {})
+    if (!enginePayload) return
+
     const engineUrl = req.app.locals.engineUrl
     try {
         const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cover-letter`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(req.body),
+            body: JSON.stringify(enginePayload),
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()

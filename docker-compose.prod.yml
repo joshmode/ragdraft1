@@ -1,12 +1,10 @@
 services:
   engine:
-    environment:
-      ALLOW_LOCAL_KEY_WRITE: "false"
-      LOCAL_ENV_PATH: /run/secrets/ragstoriches.env
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./data:/app/data
   api:
     environment:
+      NODE_ENV: production
       ALLOW_MENTOR_REGISTRATION: "false"
       ALLOW_LOCAL_PROVIDER: "false"
