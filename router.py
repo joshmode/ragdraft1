@@ -2,6 +2,9 @@ import os
 import random
 import time
 import threading
+import ipaddress
+import socket
+from urllib.parse import urlparse
 import requests
 
 
@@ -52,6 +55,26 @@ def _default_local_endpoint() -> str:
     if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
         return "http://host.docker.internal:11434/api/chat"
     return "http://localhost:11434/api/chat"
+
+
+def _is_local_endpoint(url: str) -> bool:
+    """local ollama (loopback/private) and tunneled ollama (public, for hosted deployments) are
+    both legitimate here - only block link-local/metadata-service targets like cloud instance
+    metadata endpoints, which have no business being an LLM endpoint either way"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        host = parsed.hostname
+        if host == "host.docker.internal":
+            return True
+        for entry in socket.getaddrinfo(host, None):
+            addr = ipaddress.ip_address(entry[4][0])
+            if addr.is_link_local or addr.is_multicast or addr.is_unspecified or addr.is_reserved:
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def _resolve_key(provider: str, env_var: str, api_key: str) -> str:
@@ -163,6 +186,8 @@ def llm_call(
                     return res.choices[0].message.content
 
                 elif provider == "local":
+                    if not _is_local_endpoint(local_endpoint):
+                        raise ValueError("Local endpoint isn't allowed (blocked internal/metadata address).")
                     mdl = model or _DEFAULT_MODELS["local"]
                     payload = {
                         "model": mdl,

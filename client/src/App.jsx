@@ -160,21 +160,22 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
     })
 
     return <section className="setup-band">
-        <hr className="slim-divider" />
-        <div className="two-col">
-            <div>
-                <span className="section-label">Resume PDF / DOCX / ODT / TXT / MD / LinkedIn ZIP</span>
-                <div {...getRootProps()} className={`dropzone ${isDragActive ? "active" : ""}`}>
-                    <input {...getInputProps()} />
-                    {file ? <span className="success">{file.name}</span> : "Drop your resume here, or click to upload"}
+        <div className="card">
+            <div className="two-col">
+                <div>
+                    <span className="section-label">Resume PDF / DOCX / ODT / TXT / MD / LinkedIn ZIP</span>
+                    <div {...getRootProps()} className={`dropzone ${isDragActive ? "active" : ""}`}>
+                        <input {...getInputProps()} />
+                        {file ? <span className="success">{file.name}</span> : "Drop your resume here, or click to upload"}
+                    </div>
+                </div>
+                <div>
+                    <span className="section-label">Job Description <small>(optional for ATS matching)</small></span>
+                    <textarea className="input-field" value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Paste a full job description for keyword matching, or leave blank to improve the CV from rewrite decisions only." />
                 </div>
             </div>
-            <div>
-                <span className="section-label">Job Description <small>(optional for ATS matching)</small></span>
-                <textarea className="input-field" value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Paste a full job description for keyword matching, or leave blank to improve the CV from rewrite decisions only." />
-            </div>
+            <button className="btn-primary analyse-btn" disabled={!file || busy} onClick={onAnalyse}>{busy ? <><span className="spinner" />Analysing — this usually takes under a minute...</> : "Analyse resume ✨"}</button>
         </div>
-        <button className="btn-primary analyse-btn" disabled={!file || busy} onClick={onAnalyse}>{busy ? <><span className="spinner" />Analysing — this usually takes under a minute...</> : "Analyse resume ✨"}</button>
     </section>
 }
 
@@ -195,8 +196,12 @@ function ScoreCard({ scoreData }) {
         <span className="section-label">Resume Score</span>
         <div className="score-tooltip-wrap">
             <div className="score-stack">
-                <div className="score-number" style={{ color: cfg.color }}>{score}</div>
-                <span className="score-label-text" style={{ color: cfg.color }}>{cfg.label}</span>
+                <div className="score-ring" style={{ "--pct": score, "--ring-color": cfg.color }}>
+                    <div className="score-ring-inner">
+                        <div className="score-number" style={{ color: cfg.color }}>{score}</div>
+                        <span className="score-label-text" style={{ color: cfg.color }}>{cfg.label}</span>
+                    </div>
+                </div>
                 <span className="score-sub">out of 100 · hover for breakdown</span>
             </div>
             <div className="score-tooltip">{lines}</div>
@@ -206,7 +211,7 @@ function ScoreCard({ scoreData }) {
 
 function ResultsSidebar({ result, user, onLogout }) {
     const sections = result.sections || {}
-    return <aside className="sidebar open">
+    return <aside className="sidebar">
         <div className="sidebar-top">
             <span className="sidebar-user">Signed in as <b>{user.display_name}</b></span>
             <button className="btn-signout" onClick={onLogout}>Sign out</button>
@@ -899,7 +904,22 @@ function App() {
         {needsKey && <p className="warning-strip">Add a {providerMeta.label.replace(" (Own Key)", "")} API key above, or switch to Default (Free), before analysing.</p>}
         {error && <p className="warning-strip">{error}</p>}
         {!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
-        {result && <><ResultsSidebar result={result} user={user} onLogout={logout} /><nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>{view === "Rewrite Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}{view === "Keyword Gap" && <KeywordGap result={result} />}{view === "Extracted Sections" && <ExtractedSections result={result} />}{view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} />}{view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} />}{view === "Mentor Feedback" && <FeedbackInbox />}{view === "Analytics" && <Analytics result={result} history={history} />}{view === "Job Matching" && <JobMatching result={result} provider={provider} localEndpoint={localEndpoint} />}</>}
+        {result && <div className="workspace">
+            <ResultsSidebar result={result} user={user} onLogout={logout} />
+            <div className="workspace-main">
+                <nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>
+                <div className="fade-in" key={view}>
+                    {view === "Rewrite Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}
+                    {view === "Keyword Gap" && <KeywordGap result={result} />}
+                    {view === "Extracted Sections" && <ExtractedSections result={result} />}
+                    {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} />}
+                    {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} />}
+                    {view === "Mentor Feedback" && <FeedbackInbox />}
+                    {view === "Analytics" && <Analytics result={result} history={history} />}
+                    {view === "Job Matching" && <JobMatching result={result} provider={provider} localEndpoint={localEndpoint} />}
+                </div>
+            </div>
+        </div>}
     </main>
 }
 
