@@ -297,7 +297,7 @@ def fetch_linkedin_profile(access_token: str) -> dict:
         return {"error": str(e)}
 
 
-def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpoint: str, model: str = "") -> dict:
+def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpoint: str, model: str = "", api_key: str = "") -> dict:
     sys_prompt = (
         "You are a resume-to-job-description matching expert. "
         "Compare the candidate's resume against the job description. "
@@ -318,7 +318,7 @@ def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpo
         import json
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=1024)
+                       model=model, max_tokens=1024, api_key=api_key)
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             lines = cleaned.splitlines()

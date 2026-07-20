@@ -4,8 +4,10 @@ import { authenticateToken } from "../middleware/auth.js"
 import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
+import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
 
 const router = Router()
+const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
 router.post("/jd", authenticateToken, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
@@ -75,7 +77,11 @@ router.post("/linkedin", authenticateToken, async (req, res) => {
 })
 
 router.post("/compare", authenticateToken, async (req, res) => {
-    if (req.body.provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
+    const provider = req.body.provider
+    if (!PROVIDER_CHOICES.has(provider)) {
+        return res.status(400).json({ error: "Unknown provider." })
+    }
+    if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
         return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
     }
     const analysisId = req.body.analysis_id ? Number(req.body.analysis_id) : null
@@ -87,12 +93,27 @@ router.post("/compare", authenticateToken, async (req, res) => {
         const job = getDb().prepare("SELECT id FROM job_descriptions WHERE id = ? AND user_id = ?").get(jobId, req.user.id)
         if (!job) return res.status(404).json({ error: "Job description not found." })
     }
+
+    let engineProvider, apiKey
+    try {
+        ({ engineProvider, apiKey } = resolveProviderForRequest(req.user.id, provider))
+    } catch (err) {
+        if (err instanceof ProviderResolutionError) return res.status(err.status).json({ error: err.message })
+        throw err
+    }
+
     const engineUrl = req.app.locals.engineUrl
     try {
         const engineRes = await fetchEngineWithRetry(`${engineUrl}/compare-resume-jd`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(req.body),
+            body: JSON.stringify({
+                resume_text: req.body.resume_text || "",
+                jd_text: req.body.jd_text || "",
+                provider: engineProvider,
+                local_endpoint: req.body.local_endpoint || "",
+                api_key: apiKey,
+            }),
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()

@@ -4,7 +4,7 @@ RAGsToRiches now runs as a React single-page application served by an Express RE
 
 ## Run with Docker
 
-Copy `.env.example` to `.env`, set a long `JWT_SECRET`, and add at least one provider key. Then start the full application:
+Copy `.env.example` to `.env`, set a long `JWT_SECRET` and `KEY_ENCRYPTION_SECRET` (`openssl rand -hex 32` for each), and add a `GROQ_API_KEY` so the free tier works out of the box (see "Providers & API keys" below). Then start the full application:
 
 ```bash
 docker compose up --build
@@ -12,13 +12,29 @@ docker compose up --build
 
 Open `http://localhost:3000`.
 
-The development compose setup allows a signed-in user to add a provider key through the UI. The key is stored in `data/.env`, which is mounted as persistent local application data. The production overlay disables this local key-write route and local model endpoints:
-
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 ```
 
 Use environment variables or your host's secret manager for production credentials. Keep `.env`, `data/`, and `chroma_db/` out of source control.
+
+## Providers & API keys
+
+The provider dropdown has five options:
+
+| Option | Who pays | Key source |
+|---|---|---|
+| **Default (Free)** | You (the operator), via a free tier | `GROQ_API_KEY` in `.env`, shared by every visitor |
+| **Gemini / Claude / ChatGPT (Own Key)** | Each user, individually | That user's own key, saved to their account |
+| **Local LLM** | Nobody (self-hosted model) | An endpoint the user provides |
+
+**"Default (Free)" uses [Groq](https://console.groq.com/keys)**, not one of the big three — Groq has a genuinely free, generous rate-limited tier, which is what makes a public deployment usable by people with no API key of their own. Get a free key and set `GROQ_API_KEY` in `.env`; that one key is shared by every visitor who picks "Default." There's no meaningful free ongoing tier for Claude or OpenAI (only small trial credits), and Gemini's free tier is more restrictive than Groq's, which is why Groq is the pooled default rather than Gemini.
+
+**Per-user "Own Key" storage is real bring-your-own-key, not shared state.** Each user's key is encrypted (AES-256-GCM, keyed by `KEY_ENCRYPTION_SECRET`) and stored against their account in SQLite. It's decrypted server-side only at the moment of an LLM call, for that one user's request, and is never written to a shared file, env var, or returned to any client. Two users can each save a different Gemini key and their requests never cross — this replaced an earlier design that wrote every saved key into one shared file, which meant whoever saved a key last silently became the key everyone's requests used.
+
+There's no model dropdown anymore — each provider always uses its current flagship "latest" model, configured server-side (`GEMINI_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`, `OPENAI_DEFAULT_MODEL`, `GROQ_DEFAULT_MODEL` in `.env`). Double-check these against each provider's current docs before deploying — model IDs are a moving target and the shipped defaults may drift out of date.
+
+**Local LLM** only works if the *server* can reach the endpoint — not the visitor's own laptop. A website can't reach into a stranger's home network by default. Running the app locally, `localhost:11434` (Ollama's default port) resolves correctly since browser and server are the same machine. On a hosted deployment, a user who wants to use their own local model needs to expose it with a tunnel (ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that public URL into the endpoint field — the UI explains this inline.
 
 ## Services
 
@@ -142,8 +158,8 @@ runs on Render/Railway/Fly.io if you prefer a managed platform).
 2. **Copy the repo and configure secrets** on that machine:
    ```bash
    cp .env.example .env
-   # set a long random JWT_SECRET, and at least one provider key
-   # (GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY)
+   # set a long random JWT_SECRET and KEY_ENCRYPTION_SECRET (openssl rand -hex 32),
+   # and GROQ_API_KEY so the free tier works for visitors with no key of their own
    ```
    Set `FRONTEND_URL` in `.env` (or the compose file's `api` environment) to
    your real domain, e.g. `FRONTEND_URL=https://resumes.example.com`. It
@@ -178,3 +194,27 @@ Operational notes for running with real traffic:
   `ALLOW_LOCAL_PROVIDER=false` by default; flip them back on deliberately if
   your deployment needs open mentor sign-ups or a locally-hosted model
   endpoint reachable from the server.
+
+### Deploying on Oracle Cloud's Always Free tier
+
+Oracle's Always Free VPS is a genuinely permanent $0 option and works fine
+for this stack, with one thing to check first: their Ampere A1 instance is
+**ARM64 (aarch64)**, not x86. Everything in this repo builds fine on ARM
+*except* potentially `torch`, pulled in transitively by `easyocr` for the
+scanned-PDF OCR fallback (`requirements-engine.txt`). Whether
+`--extra-index-url https://download.pytorch.org/whl/cpu` publishes aarch64
+wheels changes over time — if `docker compose build` fails inside the
+`engine` build step, that's almost certainly why.
+
+OCR is optional and already degrades gracefully — `parser.py` returns a
+clear warning instead of crashing when it's unavailable (see "Why local
+runs were getting SIGKILL'd" above), so the simplest fix if you hit this is
+to drop `torch`, `torchvision`, `easyocr`, and `pdf2image` from
+`requirements-engine.txt` entirely. You lose scanned-PDF support; a normal
+text-based resume PDF/DOCX/TXT upload is unaffected. This also meaningfully
+shrinks the image and build time, which matters more on a free-tier VPS's
+modest CPU allocation.
+
+If you'd rather keep OCR, Oracle's Always Free tier also includes x86 micro
+instances (`VM.Standard.E2.1.Micro`) as an alternative — smaller (1GB RAM
+each), but plain x86_64 with no wheel-availability question.

@@ -11,15 +11,29 @@ _PLACEHOLDER_VALS = {
     "insert_key_here", "placeholder",
 }
 
+# "default" is the free pooled tier and always resolves to Groq server-side —
+# it is never a legal value passed all the way down here.
 _PROVIDER_LIMITS = {
     "gemini": int(os.environ.get("GEMINI_MAX_CONCURRENCY", "4")),
     "claude": int(os.environ.get("CLAUDE_MAX_CONCURRENCY", "3")),
     "chatgpt": int(os.environ.get("OPENAI_MAX_CONCURRENCY", "4")),
+    "groq": int(os.environ.get("GROQ_MAX_CONCURRENCY", "6")),
     "local": int(os.environ.get("LOCAL_MAX_CONCURRENCY", "2")),
 }
 _PROVIDER_LOCKS = {
     provider: threading.BoundedSemaphore(max(limit, 1))
     for provider, limit in _PROVIDER_LIMITS.items()
+}
+
+# Default model per provider — deliberately env-overridable rather than
+# hardcoded, since exact model IDs drift as providers release new versions.
+# Verify these against each provider's current docs before relying on them.
+_DEFAULT_MODELS = {
+    "gemini":  os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
+    "claude":  os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
+    "chatgpt": os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-4o"),
+    "groq":    os.environ.get("GROQ_DEFAULT_MODEL", "llama-3.3-70b-versatile"),
+    "local":   os.environ.get("LOCAL_DEFAULT_MODEL", "llama3"),
 }
 
 
@@ -43,6 +57,16 @@ def _default_local_endpoint() -> str:
     return "http://localhost:11434/api/chat"
 
 
+def _resolve_key(provider: str, env_var: str, api_key: str) -> str:
+    """a caller-supplied key (per-user BYOK) always wins over the operator's
+    pooled env var — this is what keeps concurrent users' keys isolated,
+    since nothing here is ever written back into process-wide state."""
+    key = (api_key or "").strip() or os.environ.get(env_var, "")
+    if not key or _is_key_placeholder(key):
+        raise EnvironmentError(f"No {provider} API key available. Add your own key, or use Default (Free).")
+    return key
+
+
 def llm_call(
     user_prompt: str,
     system_prompt: str = "",
@@ -52,8 +76,15 @@ def llm_call(
     local_endpoint: str = "",
     max_retries: int = 5,
     timeout: int = 120,
+    api_key: str = "",
 ) -> str:
-    """routes prompt to chosen llm """
+    """routes prompt to chosen llm.
+
+    api_key, when provided, is a specific user's own key for this single
+    call — it is used only for this request and never touches os.environ or
+    any shared/global state, so concurrent users on different providers (or
+    different keys for the same provider) never interfere with each other.
+    """
     provider = provider.lower()
     last_err = None
 
@@ -70,15 +101,12 @@ def llm_call(
                     from google import genai
                     from google.genai import types
 
-                    api_key = os.environ.get("GEMINI_API_KEY")
-                    if not api_key or _is_key_placeholder(api_key):
-                        raise EnvironmentError("Gemini API key not found.")
-
+                    key = _resolve_key("Gemini", "GEMINI_API_KEY", api_key)
                     client = genai.Client(
-                        api_key=api_key,
+                        api_key=key,
                         http_options=types.HttpOptions(timeout=timeout * 1000),
                     )
-                    mdl = model or "gemini-2.5-flash"
+                    mdl = model or _DEFAULT_MODELS["gemini"]
 
                     cfg_kw = {"max_output_tokens": max_tokens}
                     if system_prompt: cfg_kw["system_instruction"] = system_prompt
@@ -100,12 +128,9 @@ def llm_call(
 
                 elif provider == "claude":
                     import anthropic
-                    api_key = os.environ.get("ANTHROPIC_API_KEY")
-                    if not api_key or _is_key_placeholder(api_key):
-                        raise EnvironmentError("Claude API key not found.")
-
-                    mdl = model or "claude-4-5-sonnet-latest"
-                    client = anthropic.Anthropic(api_key=api_key, timeout=timeout)
+                    key = _resolve_key("Claude", "ANTHROPIC_API_KEY", api_key)
+                    mdl = model or _DEFAULT_MODELS["claude"]
+                    client = anthropic.Anthropic(api_key=key, timeout=timeout)
                     msg = client.messages.create(
                         model=mdl,
                         max_tokens=max_tokens,
@@ -117,12 +142,9 @@ def llm_call(
 
                 elif provider == "chatgpt":
                     import openai
-                    api_key = os.environ.get("OPENAI_API_KEY")
-                    if not api_key or _is_key_placeholder(api_key):
-                        raise EnvironmentError("ChatGPT API key not found.")
-
-                    mdl = model or "gpt-4o-mini"
-                    client = openai.OpenAI(api_key=api_key, timeout=timeout)
+                    key = _resolve_key("ChatGPT", "OPENAI_API_KEY", api_key)
+                    mdl = model or _DEFAULT_MODELS["chatgpt"]
+                    client = openai.OpenAI(api_key=key, timeout=timeout)
                     res = client.chat.completions.create(
                         model=mdl,
                         max_tokens=max_tokens,
@@ -134,8 +156,28 @@ def llm_call(
                     if res.choices[0].message.content is None: raise ValueError("ChatGPT returned None.")
                     return res.choices[0].message.content
 
+                elif provider == "groq":
+                    # Groq's API is OpenAI-compatible, so the openai SDK works
+                    # unchanged against a different base_url — no new
+                    # dependency. This is always the pooled/operator key
+                    # (Default/Free tier), never a per-user BYOK key.
+                    import openai
+                    key = _resolve_key("Groq", "GROQ_API_KEY", api_key)
+                    mdl = model or _DEFAULT_MODELS["groq"]
+                    client = openai.OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", timeout=timeout)
+                    res = client.chat.completions.create(
+                        model=mdl,
+                        max_tokens=max_tokens,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ]
+                    )
+                    if res.choices[0].message.content is None: raise ValueError("Groq returned None.")
+                    return res.choices[0].message.content
+
                 elif provider == "local":
-                    mdl = model or "llama3"
+                    mdl = model or _DEFAULT_MODELS["local"]
                     payload = {
                         "model": mdl,
                         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],

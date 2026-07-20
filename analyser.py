@@ -68,7 +68,7 @@ def _parse_json(raw: str) -> Any:
         raise
 
 
-def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str = "") -> list[str]:
+def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str = "", api_key: str = "") -> list[str]:
     """pull technical keywords from a job description via llm."""
     if not job_desc.strip():
         return []
@@ -83,7 +83,7 @@ def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str
 
     try:
         raw = llm_call(user_prompt=prompt, provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=1024)
+                       model=model, max_tokens=1024, api_key=api_key)
         return _parse_json(raw)
     except Exception as e:
         print(f"kw extraction failed: {e}")
@@ -116,6 +116,7 @@ def _run_critic(
     provider: str,
     local_endpoint: str,
     model: str,
+    api_key: str = "",
 ) -> dict:
     if not _has_new_claims(bullet, rewritten):
         result["critic"] = {"status": "skipped", "reason": "No new quantitative claim detected."}
@@ -135,7 +136,7 @@ def _run_critic(
         critic_raw = llm_call(
             user_prompt=critic_prompt, provider=provider,
             local_endpoint=local_endpoint, model=model,
-            max_tokens=100, timeout=30, max_retries=1,
+            max_tokens=100, timeout=30, max_retries=1, api_key=api_key,
         )
 
         if critic_raw.strip().upper().startswith("FAIL"):
@@ -147,7 +148,7 @@ def _run_critic(
             retry_raw = llm_call(
                 user_prompt=retry_prompt, system_prompt=sys_prompt,
                 provider=provider, local_endpoint=local_endpoint,
-                model=model, max_tokens=1024, timeout=30, max_retries=1,
+                model=model, max_tokens=1024, timeout=30, max_retries=1, api_key=api_key,
             )
             try:
                 result = _parse_json(retry_raw)
@@ -233,7 +234,8 @@ def rewrite_item(
     provider: str,
     local_endpoint: str,
     use_critic: bool = False,
-    model: str = ""
+    model: str = "",
+    api_key: str = "",
 ) -> dict:
     """rewrite a single bullet using RAG frameworks. optionally run critic loop."""
     sys_prompt, usr_prompt = _build_rewrite_prompts(bullet, frameworks, missing_kws)
@@ -241,13 +243,13 @@ def rewrite_item(
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=1024)
+                       model=model, max_tokens=1024, api_key=api_key)
         result = _normalise_severity(_parse_json(raw))
 
         if use_critic:
             result = _run_critic(
                 bullet, result.get("rewritten", bullet), result,
-                usr_prompt, sys_prompt, provider, local_endpoint, model,
+                usr_prompt, sys_prompt, provider, local_endpoint, model, api_key=api_key,
             )
 
         result["original"] = bullet
@@ -271,6 +273,7 @@ def rewrite_chunk(
     local_endpoint: str,
     use_critic: bool = False,
     model: str = "",
+    api_key: str = "",
 ) -> list[dict]:
     """rewrite a batch of resume bullets in a single LLM call instead of one call per bullet.
 
@@ -282,7 +285,7 @@ def rewrite_chunk(
         return []
     if len(items) == 1:
         text, fws = items[0]
-        return [rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model)]
+        return [rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model, api_key=api_key)]
 
     kw_hint = ", ".join(missing_kws[:12]) if missing_kws else "none"
 
@@ -307,7 +310,7 @@ def rewrite_chunk(
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=_REWRITE_SYS_PROMPT,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=min(8192, 500 * len(items)))
+                       model=model, max_tokens=min(8192, 500 * len(items)), api_key=api_key)
         parsed = _parse_json(raw)
         if not isinstance(parsed, list) or len(parsed) != len(items):
             got = len(parsed) if isinstance(parsed, list) else type(parsed).__name__
@@ -324,7 +327,7 @@ def rewrite_chunk(
     except Exception as e:
         print(f"chunk rewrite failed ({len(items)} bullets), falling back to per-bullet calls: {e}")
         return [
-            rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model)
+            rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model, api_key=api_key)
             for text, fws in items
         ]
 
@@ -333,7 +336,7 @@ def rewrite_chunk(
             sys_prompt, usr_prompt_single = _build_rewrite_prompts(text, fws, missing_kws)
             results[i] = _run_critic(
                 text, results[i].get("rewritten", text), results[i],
-                usr_prompt_single, sys_prompt, provider, local_endpoint, model,
+                usr_prompt_single, sys_prompt, provider, local_endpoint, model, api_key=api_key,
             )
 
     return results
@@ -595,7 +598,8 @@ def analyse(
     provider: str = "gemini",
     local_endpoint: str = "",
     use_critic: bool = False,
-    model: str = ""
+    model: str = "",
+    api_key: str = "",
 ) -> dict:
     t_start = time.perf_counter()
 
@@ -606,7 +610,7 @@ def analyse(
     kw_future = None
     kw_pool = ThreadPoolExecutor(max_workers=1)
     if job_description.strip():
-        kw_future = kw_pool.submit(extract_jd_kws, job_description, provider, local_endpoint, model)
+        kw_future = kw_pool.submit(extract_jd_kws, job_description, provider, local_endpoint, model, api_key)
 
     rewrites: dict[str, list[dict]] = {}
 
@@ -685,7 +689,7 @@ def analyse(
 
     def _do_chunk(chunk_jobs):
         items = [(unit["text"], fw_cache_local[unit["text"]]) for _sec, _i, unit in chunk_jobs]
-        chunk_results = rewrite_chunk(items, missing, provider, local_endpoint, use_critic, model=model)
+        chunk_results = rewrite_chunk(items, missing, provider, local_endpoint, use_critic, model=model, api_key=api_key)
         out = []
         for (sec, i, unit), rw in zip(chunk_jobs, chunk_results):
             rw = dict(rw)
@@ -807,6 +811,7 @@ def gen_cv(
     rewrite_suggestions: dict[str, list[dict]] | None = None,
     rewrite_decisions: dict[str, bool] | None = None,
     model: str = "",
+    api_key: str = "",
 ) -> str:
     """generate a tailored CV from resume data and accepted rewrites."""
     has_jd = bool(job_description.strip())
@@ -876,7 +881,7 @@ def gen_cv(
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=8192)
+                       model=model, max_tokens=8192, api_key=api_key)
         result = raw.strip()
 
         # verify no section silently vanished; if one did, append it verbatim
@@ -903,6 +908,7 @@ def gen_cover_letter(
     provider: str,
     local_endpoint: str,
     model: str = "",
+    api_key: str = "",
 ) -> str:
     """generate a professional cover letter from resume and optional JD."""
     resume_text = resume.to_llm_prompt()
@@ -940,7 +946,7 @@ def gen_cover_letter(
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=2048)
+                       model=model, max_tokens=2048, api_key=api_key)
         return raw.strip()
     except Exception as e:
         print(f"cover letter generation failed: {e}")

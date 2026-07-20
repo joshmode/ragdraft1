@@ -165,6 +165,18 @@ function initDb(db) {
         );
         CREATE INDEX IF NOT EXISTS idx_mentor_feedback_candidate ON mentor_feedback(candidate_id, status);
         CREATE INDEX IF NOT EXISTS idx_mentor_feedback_mentor ON mentor_feedback(mentor_id);
+        CREATE TABLE IF NOT EXISTS user_api_keys (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            encrypted_key TEXT NOT NULL,
+            iv TEXT NOT NULL,
+            auth_tag TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, provider),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
     `)
 
     // CREATE TABLE IF NOT EXISTS above is a no-op on a database that already

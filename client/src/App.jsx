@@ -4,19 +4,15 @@ import ReactMarkdown from "react-markdown"
 import api from "./api/client"
 import { useAuth } from "./context/AuthContext"
 
-const PROVIDERS = {
-    Gemini: ["gemma-4-31b-it", "gemini-3.5-flash", "gemini-3.1-pro"],
-    Claude: ["claude-4-5-sonnet-latest", "claude-4-5-haiku-latest"],
-    ChatGPT: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
-    Local: ["llama3"],
-}
-
-const PROVIDER_KEYS = {
-    Gemini: "gemini",
-    Claude: "claude",
-    ChatGPT: "chatgpt",
-    Local: "local",
-}
+// Model choice is fixed per provider on the server now (always "latest") —
+// the UI only ever picks a provider, not a specific model.
+const PROVIDER_OPTIONS = [
+    { key: "default", label: "Default (Free)", byok: false },
+    { key: "gemini", label: "Gemini (Own Key)", byok: true },
+    { key: "claude", label: "Claude (Own Key)", byok: true },
+    { key: "chatgpt", label: "ChatGPT (Own Key)", byok: true },
+    { key: "local", label: "Local LLM", byok: false },
+]
 
 const NAV_ITEMS = [
     "Rewrite Suggestions", "Keyword Gap", "Extracted Sections", "Tailored CV",
@@ -363,7 +359,7 @@ function downloadText(text, filename) {
     URL.revokeObjectURL(href)
 }
 
-function DocumentGenerator({ type, result, provider, model, localEndpoint, decisions, analysisId, text, setText }) {
+function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText }) {
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const title = type === "cv" ? "Tailored CV" : "Cover Letter"
@@ -377,7 +373,6 @@ function DocumentGenerator({ type, result, provider, model, localEndpoint, decis
                 resume_json: result.parsed_resume,
                 job_description: result.job_description || "",
                 provider,
-                model,
                 local_endpoint: localEndpoint,
                 analysis_id: analysisId || result.analysis_id,
             }
@@ -695,7 +690,7 @@ function FeedbackInbox() {
     </section>
 }
 
-function JobMatching({ result, provider, model, localEndpoint }) {
+function JobMatching({ result, provider, localEndpoint }) {
     const [url, setUrl] = useState("")
     const [scraped, setScraped] = useState("")
     const [jobId, setJobId] = useState(null)
@@ -712,7 +707,7 @@ function JobMatching({ result, provider, model, localEndpoint }) {
     }
     async function compare() {
         try {
-            const res = await api.post("/scrape/compare", { resume_text: result.raw_text || "", jd_text: scraped || result.job_description || "", provider, model, local_endpoint: localEndpoint, job_id: jobId, analysis_id: result.analysis_id })
+            const res = await api.post("/scrape/compare", { resume_text: result.raw_text || "", jd_text: scraped || result.job_description || "", provider, local_endpoint: localEndpoint, job_id: jobId, analysis_id: result.analysis_id })
             setComparison(res.data)
         } catch (err) { setError(getError(err)) }
     }
@@ -728,12 +723,13 @@ function JobMatching({ result, provider, model, localEndpoint }) {
 
 function App() {
     const { user, logout } = useAuth()
-    const [providerDisplay, setProviderDisplay] = useState("Gemini")
-    const [model, setModel] = useState(PROVIDERS.Gemini[0])
+    const [provider, setProvider] = useState("default")
     const [useCritic, setUseCritic] = useState(false)
     const [localEndpoint, setLocalEndpoint] = useState("http://localhost:11434/api/chat")
     const [status, setStatus] = useState({})
     const [apiKey, setApiKey] = useState("")
+    const [keyBusy, setKeyBusy] = useState(false)
+    const [keyMessage, setKeyMessage] = useState("")
     const [file, setFile] = useState(null)
     const [jobDescription, setJobDescription] = useState("")
     const [result, setResult] = useState(null)
@@ -744,29 +740,44 @@ function App() {
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const [history, setHistory] = useState([])
-    const provider = PROVIDER_KEYS[providerDisplay]
-    const needsKey = provider !== "local" && status[provider] === false
+    const providerMeta = PROVIDER_OPTIONS.find(p => p.key === provider)
+    const needsKey = providerMeta?.byok && status[provider] === false
+
+    function refreshStatus() {
+        return api.get("/settings/env-status").then(res => setStatus(res.data)).catch(() => setStatus({}))
+    }
 
     useEffect(() => {
         if (!user) return
-        api.get("/settings/env-status").then(res => setStatus(res.data)).catch(() => setStatus({}))
+        refreshStatus()
         api.get("/analysis/history").then(res => setHistory(res.data)).catch(() => setHistory([]))
     }, [user])
 
     useEffect(() => {
-        setModel(PROVIDERS[providerDisplay][0])
         setResult(null)
         setAnalysisId(null)
         setDecisions({})
         setDocs({ cv: "", cover_letter: "" })
-    }, [providerDisplay, useCritic, file])
+        setKeyMessage("")
+    }, [provider, useCritic, file])
 
     async function saveKey() {
+        setKeyBusy(true)
+        setKeyMessage("")
         try {
             await api.post("/settings/api-key", { provider, key: apiKey })
             setStatus({ ...status, [provider]: true })
             setApiKey("")
-        } catch (err) { setError(getError(err)) }
+        } catch (err) { setKeyMessage(getError(err)) } finally { setKeyBusy(false) }
+    }
+
+    async function removeKey() {
+        setKeyBusy(true)
+        setKeyMessage("")
+        try {
+            await api.delete(`/settings/api-key/${provider}`)
+            setStatus({ ...status, [provider]: false })
+        } catch (err) { setKeyMessage(getError(err)) } finally { setKeyBusy(false) }
     }
 
     async function analyse() {
@@ -782,7 +793,6 @@ function App() {
                 resume_json: upload.data.parsed,
                 job_description: jobDescription,
                 provider,
-                model,
                 use_critic: useCritic,
                 local_endpoint: provider === "local" ? localEndpoint : "",
             })
@@ -822,7 +832,43 @@ function App() {
     }
 
     const navItems = NAV_ITEMS
-    return <main className="app-container"><Hero /><div className="model-bar"><label>LLM Model<select className="input-field" value={`${providerDisplay}:${model}`} onChange={e => { const [display, nextModel] = e.target.value.split(":"); setProviderDisplay(display); setModel(nextModel) }}>{Object.entries(PROVIDERS).flatMap(([display, models]) => models.map(item => <option key={`${display}:${item}`} value={`${display}:${item}`}>{display} → {item}</option>))}</select></label><label className="toggle-wrap"><span className={`toggle-track ${useCritic ? "active" : ""}`} onClick={() => setUseCritic(!useCritic)}><span className="toggle-thumb" /></span>Agentic Self-Correction</label>{provider === "local" && <input className="input-field" value={localEndpoint} onChange={e => setLocalEndpoint(e.target.value)} placeholder="Local API Endpoint" />}{!result && <span className="topbar-inline"><span className="muted">Signed in as <b>{user.display_name}</b></span><button className="btn-secondary" onClick={logout}>Sign out</button></span>}</div>{needsKey && <div className="card key-card"><span className="section-label">{providerDisplay} API Key Required</span><p className="muted">Enter a key to continue locally. Hosted deployments may disable this in favour of managed credentials.</p><div className="two-col"><input className="input-field" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={`Paste your ${providerDisplay} API key`} /><button className="btn-primary" onClick={saveKey}>Save API Key</button></div></div>}<ResumeSetup file={file} setFile={setFile} jobDescription={jobDescription} setJobDescription={setJobDescription} onAnalyse={analyse} busy={busy} />{error && <p className="warning-strip">{error}</p>}{!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}{result && <><ResultsSidebar result={result} user={user} onLogout={logout} /><nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>{view === "Rewrite Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}{view === "Keyword Gap" && <KeywordGap result={result} />}{view === "Extracted Sections" && <ExtractedSections result={result} />}{view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} model={model} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} />}{view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} model={model} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} />}{view === "Mentor Feedback" && <FeedbackInbox />}{view === "Analytics" && <Analytics result={result} history={history} />}{view === "Job Matching" && <JobMatching result={result} provider={provider} model={model} localEndpoint={localEndpoint} />}</>}</main>
+    return <main className="app-container">
+        <Hero />
+        <div className="model-bar">
+            <label>AI Provider
+                <select className="input-field" value={provider} onChange={e => setProvider(e.target.value)}>
+                    {PROVIDER_OPTIONS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+                </select>
+            </label>
+            <label className="toggle-wrap"><span className={`toggle-track ${useCritic ? "active" : ""}`} onClick={() => setUseCritic(!useCritic)}><span className="toggle-thumb" /></span>Agentic Self-Correction</label>
+            {provider === "local" && <div className="local-endpoint-field">
+                <input className="input-field" value={localEndpoint} onChange={e => setLocalEndpoint(e.target.value)} placeholder="Local API Endpoint" />
+                <small className="muted">Must be reachable by the server, not just your browser. Defaults to your machine's Ollama if you're running this app locally — for a hosted deployment, expose your local model with a tunnel (e.g. ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that URL here.</small>
+            </div>}
+            {!result && <span className="topbar-inline"><span className="muted">Signed in as <b>{user.display_name}</b></span><button className="btn-secondary" onClick={logout}>Sign out</button></span>}
+        </div>
+        {providerMeta?.byok && <div className="card key-card">
+            <span className="section-label">{providerMeta.label.replace(" (Own Key)", "")} API Key</span>
+            {status[provider]
+                ? <>
+                    <p className="muted">A key is saved for your account and will be used for your requests only.</p>
+                    <button className="btn-secondary" disabled={keyBusy} onClick={removeKey}>Remove key</button>
+                </>
+                : <>
+                    <p className="muted">Add your own key to use {providerMeta.label.replace(" (Own Key)", "")} — it's encrypted and tied to your account, used only for your own requests, never shared with other users.</p>
+                    <div className="two-col">
+                        <input className="input-field" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={`Paste your ${providerMeta.label.replace(" (Own Key)", "")} API key`} />
+                        <button className="btn-primary" disabled={keyBusy || !apiKey.trim()} onClick={saveKey}>Save Key</button>
+                    </div>
+                </>}
+            {keyMessage && <p className="error-msg">{keyMessage}</p>}
+        </div>}
+        <ResumeSetup file={file} setFile={setFile} jobDescription={jobDescription} setJobDescription={setJobDescription} onAnalyse={analyse} busy={busy || needsKey} />
+        {needsKey && <p className="warning-strip">Add a {providerMeta.label.replace(" (Own Key)", "")} API key above, or switch to Default (Free), before analysing.</p>}
+        {error && <p className="warning-strip">{error}</p>}
+        {!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
+        {result && <><ResultsSidebar result={result} user={user} onLogout={logout} /><nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>{view === "Rewrite Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}{view === "Keyword Gap" && <KeywordGap result={result} />}{view === "Extracted Sections" && <ExtractedSections result={result} />}{view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} />}{view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} />}{view === "Mentor Feedback" && <FeedbackInbox />}{view === "Analytics" && <Analytics result={result} history={history} />}{view === "Job Matching" && <JobMatching result={result} provider={provider} localEndpoint={localEndpoint} />}</>}
+    </main>
 }
 
 export default App

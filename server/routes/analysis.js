@@ -7,9 +7,11 @@ import { authenticateToken } from "../middleware/auth.js"
 import { canAccessAnalysis, getOwnedAnalysis, getOwnedResume } from "../access.js"
 import { pollLimiter } from "../middleware/rateLimit.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
+import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
 
 const router = Router()
 const ANALYSIS_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
+const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
 // Re-running the exact same resume + job description + provider/model +
 // critic setting produces the exact same result, so we key a short-lived
@@ -78,6 +80,19 @@ async function processAnalysis(engineUrl, jobId, payload) {
     const db = getDb()
     db.prepare("UPDATE analysis_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(jobId)
     try {
+        // Resolved fresh here, right before the outbound call, and never
+        // stored anywhere: payload (persisted in analysis_jobs.request_json)
+        // never carries the decrypted key, only the user's provider choice.
+        const { engineProvider, apiKey } = resolveProviderForRequest(payload.user_id, payload.provider)
+        const enginePayload = {
+            resume_json: payload.resume_json,
+            job_description: payload.job_description,
+            provider: engineProvider,
+            use_critic: payload.use_critic,
+            local_endpoint: payload.local_endpoint,
+            api_key: apiKey,
+        }
+
         // fetchEngineWithRetry rides out a transient provider rate limit (the
         // engine already retries individual LLM calls internally — this
         // covers the case where the whole analysis exhausts those retries)
@@ -86,7 +101,7 @@ async function processAnalysis(engineUrl, jobId, payload) {
         const analyseRes = await fetchEngineWithRetry(`${engineUrl}/analyse`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(enginePayload),
         })
         if (!analyseRes.ok) throw new Error((await analyseRes.json()).error || "Analysis failed.")
         const results = await analyseRes.json()
@@ -95,13 +110,13 @@ async function processAnalysis(engineUrl, jobId, payload) {
         const scoreTotal = typeof results.score === "object" ? results.score.total || 0 : results.score || 0
         const contentHash = analysisContentHash({
             resumeId: payload.resume_id, jobDescription: payload.job_description,
-            provider: payload.provider, model: payload.model, useCritic: payload.use_critic,
+            provider: payload.provider, model: "", useCritic: payload.use_critic,
         })
         const row = db.prepare(
             "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
         ).run(
             payload.resume_id, payload.user_id, JSON.stringify(results), payload.job_description || "",
-            payload.provider || "", payload.model || "", scoreTotal, contentHash,
+            payload.provider || "", "", scoreTotal, contentHash,
         )
         results.analysis_id = row.lastInsertRowid
         results.resume_id = payload.resume_id
@@ -117,20 +132,33 @@ async function processAnalysis(engineUrl, jobId, payload) {
 }
 
 router.post("/run", authenticateToken, (req, res) => {
-    const { resume_json, job_description, provider, model, use_critic, local_endpoint, resume_id } = req.body
+    const { resume_json, job_description, provider, use_critic, local_endpoint, resume_id } = req.body
     const resumeId = parseInt(resume_id)
     if (!resumeId || !getOwnedResume(resumeId, req.user.id)) {
         return res.status(404).json({ error: "Resume not found." })
     }
+    if (!PROVIDER_CHOICES.has(provider)) {
+        return res.status(400).json({ error: "Unknown provider." })
+    }
     if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
         return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
     }
+    // fail fast, synchronously, if a BYOK provider has no key saved yet —
+    // otherwise the job would queue, run in the background, and only then
+    // fail with a much less obvious error.
+    try {
+        resolveProviderForRequest(req.user.id, provider)
+    } catch (err) {
+        if (err instanceof ProviderResolutionError) return res.status(err.status).json({ error: err.message })
+        throw err
+    }
 
-    const payload = { resume_id: resumeId, user_id: req.user.id, resume_json, job_description, provider, model, use_critic, local_endpoint }
+    // model is fixed per provider server-side now — never client-selected.
+    const payload = { resume_id: resumeId, user_id: req.user.id, resume_json, job_description, provider, use_critic, local_endpoint }
     const db = getDb()
 
     if (ANALYSIS_CACHE_TTL_MINUTES > 0) {
-        const contentHash = analysisContentHash({ resumeId, jobDescription: job_description, provider, model, useCritic: use_critic })
+        const contentHash = analysisContentHash({ resumeId, jobDescription: job_description, provider, model: "", useCritic: use_critic })
         const cached = db.prepare(
             `SELECT id FROM analyses WHERE user_id = ? AND content_hash = ? AND content_hash != '' AND created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 1`
         ).get(req.user.id, contentHash, `-${ANALYSIS_CACHE_TTL_MINUTES} minutes`)

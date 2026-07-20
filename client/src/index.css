@@ -677,6 +677,8 @@ details.card > summary {
 .evaluation-card .toggle-wrap { margin-bottom: 0.85rem; font-size: 0.84rem; }
 .evaluation-card textarea { margin-bottom: 0.35rem; }
 .key-card .two-col { align-items: center; }
+.local-endpoint-field { display: flex; flex-direction: column; gap: 0.35rem; min-width: 260px; flex: 1 1 260px; }
+.local-endpoint-field small { line-height: 1.4; }
 .history-list small { text-align: right; }
 .export-row .btn-dark { flex: 0 0 auto; }
 

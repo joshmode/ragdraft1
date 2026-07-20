@@ -4,9 +4,6 @@ services:
     env_file:
       - path: .env
         required: false
-    environment:
-      ALLOW_LOCAL_KEY_WRITE: "true"
-      LOCAL_ENV_PATH: /app/data/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
