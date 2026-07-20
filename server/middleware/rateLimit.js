@@ -1,8 +1,6 @@
 import rateLimit from "express-rate-limit"
 
-// Every limiter reports how long the caller should wait, both as a
-// standard Retry-After header and as JSON, so the frontend can back off and
-// retry automatically instead of just surfacing a dead-end error.
+// reports retry_after both as a header and in the JSON body so the client can back off
 function rateLimitHandler(message) {
     return (req, res) => {
         const resetMs = req.rateLimit?.resetTime ? req.rateLimit.resetTime.getTime() - Date.now() : 30000
@@ -12,9 +10,7 @@ function rateLimitHandler(message) {
     }
 }
 
-// Applied globally as a floor against basic abuse/scraping. Sized generously
-// because it counts every /api call a signed-in user makes, including
-// status polling and PDF re-highlighting while reviewing suggestions.
+// floor against abuse/scraping - sized generously since it counts every /api call, incl polling
 export const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 600,
@@ -23,10 +19,7 @@ export const generalLimiter = rateLimit({
     handler: rateLimitHandler("Too many requests. Please slow down and try again shortly."),
 })
 
-// Job-status polling and highlight re-rendering are cheap, idempotent reads
-// that legitimately fire once a second or on every suggestion click — they
-// need their own generous, short-window bucket so they don't eat into the
-// budget shared with everything else and trip generalLimiter first.
+// polling/highlighting fire constantly and shouldn't eat the general budget
 export const pollLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: 90,
@@ -35,7 +28,7 @@ export const pollLimiter = rateLimit({
     handler: rateLimitHandler("Refreshing too frequently. Please wait a moment."),
 })
 
-// Login/register are the classic brute-force targets — keep this tight.
+// login/register are the classic brute-force targets, keep tight
 export const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 20,
@@ -45,9 +38,7 @@ export const authLimiter = rateLimit({
     handler: rateLimitHandler("Too many authentication attempts. Please try again later."),
 })
 
-// Analysis/generation calls fan out to paid LLM providers — this is the
-// endpoint most worth protecting once the app is public, since unbounded
-// abuse here directly burns API budget rather than just server CPU.
+// analysis/generation burns API budget, not just CPU - worth protecting most
 export const llmLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 30,

@@ -7,13 +7,7 @@ import io
 import zipfile
 from dataclasses import dataclass, field
 
-# easyocr pulls in torch (700MB+ of RSS once imported) and pdf2image needs
-# poppler. Importing them eagerly at module load means every engine process —
-# including gunicorn workers that never touch a scanned PDF — pays that
-# memory cost on startup, which is what was causing OOM SIGKILLs. We only
-# check *availability* via find_spec (cheap, doesn't execute the module) and
-# defer the actual `import easyocr` / `import pdf2image` / `import numpy`
-# until a scanned PDF genuinely needs OCR.
+# find_spec checks availability without importing torch (700MB+ RSS) until a scan actually needs OCR
 def _ocr_installed() -> bool:
     return (
         importlib.util.find_spec("easyocr") is not None
@@ -22,8 +16,7 @@ def _ocr_installed() -> bool:
     )
 
 
-# easyocr Reader is expensive to init — keep it as a per-process singleton
-# once it has been loaded, but never load it until OCR is actually run.
+# easyocr Reader is expensive to init, keep it as a per-process singleton once loaded
 _reader = None
 
 def _get_reader():

@@ -24,17 +24,16 @@ function sleep(ms) {
 api.interceptors.response.use(
     (res) => res,
     async (err) => {
-        if (err.response?.status === 401) {
+        // only reload on a 401 that HAD a token - a bad login/register attempt has no
+        // Authorization header and needs to reach the form's own error handling instead
+        if (err.response?.status === 401 && err.config?.headers?.Authorization) {
             localStorage.removeItem("rtr_token")
             localStorage.removeItem("rtr_user")
             window.location.reload()
             return Promise.reject(err)
         }
 
-        // A 429 (from our own rate limiter or forwarded from the LLM
-        // provider) is transient by definition — retry automatically with
-        // backoff + jitter before ever surfacing it as an error, so a busy
-        // moment doesn't require the user to notice and manually retry.
+        // 429 is transient, retry with backoff+jitter before surfacing it as an error
         if (err.response?.status === 429) {
             const config = err.config || {}
             const attempt = config.__retryCount || 0

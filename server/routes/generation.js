@@ -10,10 +10,7 @@ import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.
 const router = Router()
 const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
-// Resolves the caller's provider choice into what the engine needs (the
-// internal provider name and, for BYOK, that user's own decrypted key) and
-// builds the outbound payload fresh — never forwards req.body verbatim, so
-// a client can't smuggle its own api_key/model fields into the engine call.
+// builds the payload fresh so a client can't smuggle its own api_key/model in
 function buildEnginePayload(req, res, extraFields) {
     const provider = req.body.provider
     if (!PROVIDER_CHOICES.has(provider)) {
@@ -120,8 +117,7 @@ async function exportDocument(req, res, path, type) {
     }
 }
 
-// Latest generated documents for an analysis, so the CV / cover letter tabs
-// can restore their content after navigation instead of forcing a regenerate.
+// so switching tabs restores the last generated doc instead of forcing a regenerate
 router.get("/latest", authenticateToken, (req, res) => {
     const analysisId = parseInt(req.query.analysis_id)
     if (!analysisId || !getOwnedAnalysis(analysisId, req.user.id)) {

@@ -36,6 +36,10 @@ There's no model dropdown anymore — each provider always uses its current flag
 
 **Local LLM** only works if the *server* can reach the endpoint — not the visitor's own laptop. A website can't reach into a stranger's home network by default. Running the app locally, `localhost:11434` (Ollama's default port) resolves correctly since browser and server are the same machine. On a hosted deployment, a user who wants to use their own local model needs to expose it with a tunnel (ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that public URL into the endpoint field — the UI explains this inline.
 
+### The critic (agentic self-correction) has its own, separate provider
+
+Turning on "Agentic Self-Correction" runs a second LLM pass that checks each rewrite for invented numbers. By default that critic call uses whatever provider/key the main request used (`CRITIC_SAME_AS_MAIN=true`). Set it to `false` and the critic always uses `CRITIC_PROVIDER` + `CRITIC_API_KEY` instead, regardless of what the user picked for the main analysis — so you can run every critic check on one fixed, cheap/fast provider (Groq) even when a BYOK user's main request goes to Claude or ChatGPT. Leave `CRITIC_API_KEY` unset to just reuse that provider's normal pooled key (e.g. the same `GROQ_API_KEY`). `docker-compose.prod.yml` pins this to Groq by default; local/dev use is `true` (same-as-main) unless you change it in `.env`.
+
 ## Services
 
 - `client/` contains the Vite/React frontend.

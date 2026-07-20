@@ -1,5 +1,8 @@
 services:
   engine:
+    environment:
+      CRITIC_SAME_AS_MAIN: "false"
+      CRITIC_PROVIDER: groq
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./data:/app/data

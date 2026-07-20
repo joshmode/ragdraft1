@@ -31,9 +31,7 @@ function diffLines(before, after) {
     return out
 }
 
-// resume text as the candidate decided it: parsed sections with accepted
-// rewrite decisions applied, so the diff reflects real revisions rather than
-// raw parse noise.
+// resume text with accepted rewrites applied, so the diff shows real revisions
 function appliedSections(results) {
     const sections = results?.parsed_resume?.sections || results?.sections || {}
     const rewrites = results?.rewrites || {}
@@ -184,8 +182,7 @@ router.get("/session/:code/participants", authenticateToken, requireRole("mentor
     res.json(rows)
 })
 
-// Full history for one candidate: every analysis (score, provider, timing)
-// plus revision snapshots, so a mentor can walk the whole progression.
+// every analysis + revision snapshot for one candidate
 router.get("/candidates/:candidateId/history", authenticateToken, requireRole("mentor"), (req, res) => {
     const candidateId = parseInt(req.params.candidateId)
     if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
@@ -206,8 +203,7 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
     })
 })
 
-// Full analysis detail for a mentored candidate (rewrites, decisions, score
-// breakdown) — same shape the candidate sees.
+// full analysis detail, same shape the candidate sees
 router.get("/candidates/:candidateId/analyses/:analysisId", authenticateToken, requireRole("mentor"), (req, res) => {
     const candidateId = parseInt(req.params.candidateId)
     if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
@@ -224,8 +220,7 @@ router.get("/candidates/:candidateId/analyses/:analysisId", authenticateToken, r
     })
 })
 
-// PR-style diff between two analyses of the same candidate: per-section line
-// diff of the resume text with each analysis's accepted decisions applied.
+// pr-style per-section diff between two analyses of the same candidate
 router.get("/candidates/:candidateId/diff", authenticateToken, requireRole("mentor"), (req, res) => {
     const candidateId = parseInt(req.params.candidateId)
     if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
@@ -251,8 +246,7 @@ router.get("/candidates/:candidateId/diff", authenticateToken, requireRole("ment
     })
 })
 
-// Mentor creates feedback: either a plain comment or a suggested edit
-// (original_text -> suggested_text) the candidate can accept or dismiss.
+// a comment, or a suggested edit (original_text -> suggested_text)
 router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) => {
     const { candidate_id, analysis_id, suggestion_key, feedback_type, section, original_text, suggested_text, comment } = req.body
     const candidateId = parseInt(candidate_id)

@@ -13,9 +13,7 @@ from router import llm_call
 
 load_dotenv()
 
-# number of bullets bundled into a single LLM call during rewriting. batching
-# trades a slightly larger prompt for far fewer round trips, which is the
-# dominant cost of analysis latency (network + provider queueing per call).
+# bullets bundled into one llm call during rewriting, fewer round trips = faster
 _CHUNK_SIZE = max(1, int(os.environ.get("REWRITE_CHUNK_SIZE", "6")))
 
 # banned ai jargon that make resumes sound generic
@@ -107,6 +105,18 @@ def _has_new_claims(original: str, rewritten: str) -> bool:
     return bool(new_claims - orig_claims)
 
 
+def _critic_creds(provider: str, model: str, api_key: str, local_endpoint: str) -> tuple[str, str, str, str]:
+    # CRITIC_SAME_AS_MAIN=false pins the critic to CRITIC_PROVIDER/CRITIC_API_KEY instead
+    if os.environ.get("CRITIC_SAME_AS_MAIN", "true").lower() == "false":
+        return (
+            os.environ.get("CRITIC_PROVIDER", "groq"),
+            os.environ.get("CRITIC_MODEL", ""),
+            os.environ.get("CRITIC_API_KEY", ""),
+            os.environ.get("CRITIC_LOCAL_ENDPOINT", ""),
+        )
+    return provider, model, api_key, local_endpoint
+
+
 def _run_critic(
     bullet: str,
     rewritten: str,
@@ -121,6 +131,8 @@ def _run_critic(
     if not _has_new_claims(bullet, rewritten):
         result["critic"] = {"status": "skipped", "reason": "No new quantitative claim detected."}
         return result
+
+    provider, model, api_key, local_endpoint = _critic_creds(provider, model, api_key, local_endpoint)
 
     try:
         critic_prompt = (
@@ -603,9 +615,7 @@ def analyse(
 ) -> dict:
     t_start = time.perf_counter()
 
-    # keyword extraction is an LLM round trip while unit-building and RAG
-    # retrieval below are purely local — run them concurrently so the network
-    # wait overlaps the local work instead of preceding it.
+    # kw extraction is a network call, run it alongside the local unit-building/retrieval below
     t_kw = time.perf_counter()
     kw_future = None
     kw_pool = ThreadPoolExecutor(max_workers=1)
@@ -682,9 +692,7 @@ def analyse(
         else:
             results_by_sec.setdefault(sec, []).append((i, _label_rw(sec, unit)))
 
-    # bundle eligible bullets into chunks so each LLM call rewrites several
-    # bullets at once instead of one call per bullet — this is the main lever
-    # on analysis latency, since round-trip/queueing cost dominates per call.
+    # bundle bullets into chunks so one llm call rewrites several at once
     chunks = [eligible_jobs[k:k + _CHUNK_SIZE] for k in range(0, len(eligible_jobs), _CHUNK_SIZE)]
 
     def _do_chunk(chunk_jobs):
@@ -834,11 +842,7 @@ def gen_cv(
         for line in applied:
             cv_text += line + "\n"
 
-    # the resume text above is the single source of truth: accepted rewrites
-    # are already applied to it and dismissed ones already reverted, so the
-    # model never needs to (and must not) re-litigate those decisions. We
-    # deliberately do NOT show it the dismissed rewrite text — showing it is
-    # exactly what used to leak dismissed suggestions back into the output.
+    # cv_text already has decisions applied - never show the model dismissed rewrite text again
     section_names = list(resume.sections.keys())
     section_list = ", ".join(section_names) if section_names else "the sections present in the resume"
 
@@ -884,8 +888,7 @@ def gen_cv(
                        model=model, max_tokens=8192, api_key=api_key)
         result = raw.strip()
 
-        # verify no section silently vanished; if one did, append it verbatim
-        # from the source text so the output is never missing content.
+        # if the model dropped a section anyway, append it back verbatim
         missing_secs = [
             sec for sec in section_names
             if sec.upper() not in result.upper()

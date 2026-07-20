@@ -179,9 +179,7 @@ function initDb(db) {
         );
     `)
 
-    // CREATE TABLE IF NOT EXISTS above is a no-op on a database that already
-    // has an `analyses` table from before content_hash existed, so add it
-    // here idempotently for databases created before this column existed.
+    // CREATE TABLE is a no-op on an existing analyses table, so migrate content_hash in here
     const columns = db.prepare("PRAGMA table_info(analyses)").all().map(col => col.name)
     if (!columns.includes("content_hash")) {
         db.exec("ALTER TABLE analyses ADD COLUMN content_hash TEXT DEFAULT ''")
