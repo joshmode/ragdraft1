@@ -1,9 +1,13 @@
+import logging
 import os
 import json
 import base64
 import io
 from flask import Flask, request, jsonify, send_file
+from werkzeug.exceptions import HTTPException
 from dotenv import load_dotenv, dotenv_values
+
+logging.basicConfig(level=logging.INFO)
 
 _ENV_PATH = os.environ.get(
     "LOCAL_ENV_PATH",
@@ -29,7 +33,29 @@ import feedback
 
 app = Flask(__name__)
 
+# reject oversized request bodies before they're fully buffered/parsed —
+# 25MB file limit plus base64 (~33%) and JSON framing overhead.
+app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
+
 _KEY_NAMES = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY", "chatgpt": "OPENAI_API_KEY"}
+
+
+@app.errorhandler(HTTPException)
+def _handle_http_exception(e: HTTPException):
+    return jsonify({"error": e.description or e.name}), e.code
+
+
+@app.errorhandler(Exception)
+def _handle_unexpected_exception(e: Exception):
+    app.logger.exception("unhandled engine error")
+    return jsonify({"error": "Internal server error. Please try again."}), 500
+
+
+def _get_json_body() -> dict:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def _resume_from_json(data: dict) -> ParsedResume:
@@ -59,7 +85,7 @@ def health():
 
 @app.route("/parse", methods=["POST"])
 def parse_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     file_b64 = data.get("file", "")
     filename = data.get("filename", "resume.pdf")
 
@@ -75,7 +101,7 @@ def parse_endpoint():
 
 @app.route("/analyse", methods=["POST"])
 def analyse_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     resume = _resume_from_json(data.get("resume_json", {}))
     jd = data.get("job_description", "")
     provider = data.get("provider", "gemini")
@@ -97,7 +123,7 @@ def analyse_endpoint():
 
 @app.route("/gen-cv", methods=["POST"])
 def gen_cv_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     resume = _resume_from_json(data.get("resume_json", {}))
     jd = data.get("job_description", "")
     acc_map = data.get("acc_map", {})
@@ -118,7 +144,7 @@ def gen_cv_endpoint():
 
 @app.route("/gen-cover-letter", methods=["POST"])
 def gen_cover_letter_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     resume = _resume_from_json(data.get("resume_json", {}))
     jd = data.get("job_description", "")
     provider = data.get("provider", "gemini")
@@ -131,7 +157,7 @@ def gen_cover_letter_endpoint():
 
 @app.route("/export-docx", methods=["POST"])
 def export_docx_endpoint():
-    text = request.get_json().get("text", "")
+    text = _get_json_body().get("text", "")
     try:
         data = generate_docx(text)
         return send_file(
@@ -146,7 +172,7 @@ def export_docx_endpoint():
 
 @app.route("/export-pdf", methods=["POST"])
 def export_pdf_endpoint():
-    text = request.get_json().get("text", "")
+    text = _get_json_body().get("text", "")
     try:
         data = generate_pdf(text)
         return send_file(
@@ -161,7 +187,7 @@ def export_pdf_endpoint():
 
 @app.route("/highlight-pdf", methods=["POST"])
 def highlight_pdf_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     try:
         raw = base64.b64decode(data.get("file", ""), validate=True)
         rendered, active_page = highlight_pdf(raw, data.get("items", []), data.get("active_key", ""))
@@ -174,7 +200,7 @@ def highlight_pdf_endpoint():
 
 @app.route("/scrape-jd", methods=["POST"])
 def scrape_jd_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     url = data.get("url", "")
     text = job_scraper.scrape_jd(url)
     return jsonify({"text": text})
@@ -182,7 +208,7 @@ def scrape_jd_endpoint():
 
 @app.route("/scrape-linkedin", methods=["POST"])
 def scrape_linkedin_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     url = data.get("url", "")
     profile = job_scraper.scrape_linkedin_profile(url)
     return jsonify({"profile": profile})
@@ -190,7 +216,7 @@ def scrape_linkedin_endpoint():
 
 @app.route("/compare-resume-jd", methods=["POST"])
 def compare_endpoint():
-    data = request.get_json()
+    data = _get_json_body()
     resume_text = data.get("resume_text", "")
     jd_text = data.get("jd_text", "")
     provider = data.get("provider", "gemini")
@@ -220,7 +246,7 @@ def save_api_key():
     if os.environ.get("ALLOW_LOCAL_KEY_WRITE", "true").lower() != "true":
         return jsonify({"ok": False, "error": "Local API key storage is disabled."}), 403
 
-    data = request.get_json()
+    data = _get_json_body()
     provider = data.get("provider", "")
     key = data.get("key", "").strip()
 

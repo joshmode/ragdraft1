@@ -2,6 +2,7 @@ from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
+import os
 import re
 import time
 from dotenv import load_dotenv
@@ -11,6 +12,11 @@ from parser import ParsedResume
 from router import llm_call
 
 load_dotenv()
+
+# number of bullets bundled into a single LLM call during rewriting. batching
+# trades a slightly larger prompt for far fewer round trips, which is the
+# dominant cost of analysis latency (network + provider queueing per call).
+_CHUNK_SIZE = max(1, int(os.environ.get("REWRITE_CHUNK_SIZE", "6")))
 
 # banned ai jargon that make resumes sound generic
 _BANNED_WORDS = (
@@ -166,6 +172,60 @@ def _run_critic(
     return result
 
 
+_REWRITE_SYS_PROMPT = (
+    "You are an expert resume coach. Rewrite weak resume bullets into strong, "
+    "ATS-optimised, results-driven statements using the STAR method "
+    "(Situation, Task, Action, Result) or Google XYZ framework where applicable. "
+    "Write in a grounded, conversational tone — like a competent engineer wrote it, "
+    "not a marketing copywriter. "
+    "CRITICAL — never invent, assume, or extrapolate any facts: no new metrics, "
+    "percentages, team sizes, technologies, employers, or outcomes that are not "
+    "explicitly stated in the original bullet. Use placeholders like [X%] or [N users] "
+    "when a metric is clearly missing and note it in reasoning. "
+    "You MUST apply one of the provided writing frameworks. "
+    f"\n\nBANNED WORDS (never use these): {_BANNED_WORDS}\n"
+    "Always respond with valid JSON only, no markdown."
+)
+
+_RESULT_SCHEMA = (
+    "{\n"
+    '  "rewritten": "the improved bullet point",\n'
+    '  "reasoning": "one sentence: what was weak, what framework was applied, what changed",\n'
+    '  "framework_used": "Google XYZ | STAR | Rule of 3 | Action Verb | other",\n'
+    '  "severity": "red | yellow | green"\n'
+    "}"
+)
+
+_SEVERITY_GUIDE = (
+    "Severity guide — rate the ORIGINAL bullet, not the rewrite: "
+    "red = very weak passive language, missing action verb, or no discernible impact. "
+    "yellow = structurally okay but missing a metric or could be stronger. "
+    "green = already strong; only minor polish applied."
+)
+
+
+def _build_rewrite_prompts(bullet: str, frameworks: list[Any], missing_kws: list[str]) -> tuple[str, str]:
+    fw_ctx = "\n\n".join(f.document for f in frameworks)
+    kw_hint = ", ".join(missing_kws[:12]) if missing_kws else "none"
+
+    usr_prompt = (
+        f"FRAMEWORK GUIDANCE (apply the most relevant one):\n{fw_ctx}\n\n"
+        f"ATS KEYWORDS TO WEAVE IN NATURALLY (only if genuinely relevant):\n{kw_hint}\n\n"
+        f"BULLET TO REWRITE:\n{bullet}\n\n"
+        f"Respond with this exact JSON structure:\n{_RESULT_SCHEMA}\n"
+        f"{_SEVERITY_GUIDE}"
+    )
+    return _REWRITE_SYS_PROMPT, usr_prompt
+
+
+def _normalise_severity(result: dict) -> dict:
+    sev = str(result.get("severity", "yellow")).lower()
+    if sev not in ("red", "yellow", "green"):
+        sev = "yellow"
+    result["severity"] = sev
+    return result
+
+
 def rewrite_item(
     bullet: str,
     frameworks: list[Any],
@@ -176,51 +236,13 @@ def rewrite_item(
     model: str = ""
 ) -> dict:
     """rewrite a single bullet using RAG frameworks. optionally run critic loop."""
-    fw_ctx = "\n\n".join(f.document for f in frameworks)
-    kw_hint = ", ".join(missing_kws[:12]) if missing_kws else "none"
-
-    sys_prompt = (
-        "You are an expert resume coach. Rewrite weak resume bullets into strong, "
-        "ATS-optimised, results-driven statements using the STAR method "
-        "(Situation, Task, Action, Result) or Google XYZ framework where applicable. "
-        "Write in a grounded, conversational tone — like a competent engineer wrote it, "
-        "not a marketing copywriter. "
-        "CRITICAL — never invent, assume, or extrapolate any facts: no new metrics, "
-        "percentages, team sizes, technologies, employers, or outcomes that are not "
-        "explicitly stated in the original bullet. Use placeholders like [X%] or [N users] "
-        "when a metric is clearly missing and note it in reasoning. "
-        "You MUST apply one of the provided writing frameworks. "
-        f"\n\nBANNED WORDS (never use these): {_BANNED_WORDS}\n"
-        "Always respond with valid JSON only, no markdown."
-    )
-
-    usr_prompt = (
-        f"FRAMEWORK GUIDANCE (apply the most relevant one):\n{fw_ctx}\n\n"
-        f"ATS KEYWORDS TO WEAVE IN NATURALLY (only if genuinely relevant):\n{kw_hint}\n\n"
-        f"BULLET TO REWRITE:\n{bullet}\n\n"
-        "Respond with this exact JSON structure:\n"
-        "{\n"
-        '  "rewritten": "the improved bullet point",\n'
-        '  "reasoning": "one sentence: what was weak, what framework was applied, what changed",\n'
-        '  "framework_used": "Google XYZ | STAR | Rule of 3 | Action Verb | other",\n'
-        '  "severity": "red | yellow | green"\n'
-        "}\n"
-        "Severity guide — rate the ORIGINAL bullet, not the rewrite: "
-        "red = very weak passive language, missing action verb, or no discernible impact. "
-        "yellow = structurally okay but missing a metric or could be stronger. "
-        "green = already strong; only minor polish applied."
-    )
+    sys_prompt, usr_prompt = _build_rewrite_prompts(bullet, frameworks, missing_kws)
 
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
                        model=model, max_tokens=1024)
-        result = _parse_json(raw)
-
-        sev = result.get("severity", "yellow").lower()
-        if sev not in ("red", "yellow", "green"):
-            sev = "yellow"
-        result["severity"] = sev
+        result = _normalise_severity(_parse_json(raw))
 
         if use_critic:
             result = _run_critic(
@@ -240,6 +262,81 @@ def rewrite_item(
             "framework_used": "error",
             "severity":       "red"
         }
+
+
+def rewrite_chunk(
+    items: list[tuple[str, list[Any]]],
+    missing_kws: list[str],
+    provider: str,
+    local_endpoint: str,
+    use_critic: bool = False,
+    model: str = "",
+) -> list[dict]:
+    """rewrite a batch of resume bullets in a single LLM call instead of one call per bullet.
+
+    Falls back to per-bullet calls (rewrite_item) for the batch if the model's
+    response can't be matched back to the input bullets 1:1, so batching never
+    trades away correctness — only the common case gets faster.
+    """
+    if not items:
+        return []
+    if len(items) == 1:
+        text, fws = items[0]
+        return [rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model)]
+
+    kw_hint = ", ".join(missing_kws[:12]) if missing_kws else "none"
+
+    seen_fw: dict[str, None] = {}
+    for _text, fws in items:
+        for f in fws:
+            seen_fw.setdefault(f.document, None)
+    fw_ctx = "\n\n".join(seen_fw.keys())
+
+    bullets_block = "\n\n".join(f"[{i}] {text}" for i, (text, _fws) in enumerate(items))
+
+    usr_prompt = (
+        f"FRAMEWORK GUIDANCE (apply the most relevant one to each bullet):\n{fw_ctx}\n\n"
+        f"ATS KEYWORDS TO WEAVE IN NATURALLY (only if genuinely relevant):\n{kw_hint}\n\n"
+        f"BULLETS TO REWRITE — {len(items)} independent bullets, numbered in order. "
+        f"Rewrite EVERY one, keep the same order, do not merge or skip any:\n{bullets_block}\n\n"
+        f"Respond with ONLY a JSON array of exactly {len(items)} objects, one per bullet "
+        f"in the same order as the input, each with this exact structure:\n{_RESULT_SCHEMA}\n"
+        f"{_SEVERITY_GUIDE}"
+    )
+
+    try:
+        raw = llm_call(user_prompt=usr_prompt, system_prompt=_REWRITE_SYS_PROMPT,
+                       provider=provider, local_endpoint=local_endpoint,
+                       model=model, max_tokens=min(8192, 500 * len(items)))
+        parsed = _parse_json(raw)
+        if not isinstance(parsed, list) or len(parsed) != len(items):
+            got = len(parsed) if isinstance(parsed, list) else type(parsed).__name__
+            raise ValueError(f"expected {len(items)} rewrites in response, got {got}")
+
+        results = []
+        for (text, _fws), item_result in zip(items, parsed):
+            if not isinstance(item_result, dict):
+                raise ValueError("chunk response item was not a JSON object")
+            item_result = _normalise_severity(dict(item_result))
+            item_result["original"] = text
+            results.append(item_result)
+
+    except Exception as e:
+        print(f"chunk rewrite failed ({len(items)} bullets), falling back to per-bullet calls: {e}")
+        return [
+            rewrite_item(text, fws, missing_kws, provider, local_endpoint, use_critic, model=model)
+            for text, fws in items
+        ]
+
+    if use_critic:
+        for i, (text, fws) in enumerate(items):
+            sys_prompt, usr_prompt_single = _build_rewrite_prompts(text, fws, missing_kws)
+            results[i] = _run_critic(
+                text, results[i].get("rewritten", text), results[i],
+                usr_prompt_single, sys_prompt, provider, local_endpoint, model,
+            )
+
+    return results
 
 
 _BULLET_PREFIX_RE = re.compile(r'^\s*(?:[-*•‣▪▫◦●]|\d+[.)]|[a-zA-Z][.)])\s+')
@@ -545,51 +642,68 @@ def analyse(
                 fw_cache_local[text] = query_fw(text, n_results=2)
     t_retrieval = time.perf_counter() - t_retrieval
 
-    def _do_rewrite(sec, unit):
+    def _label_rw(sec, unit):
         text = unit["text"]
-        if unit["eligible"] and not _is_header(text, section=sec):
-            fws = fw_cache_local[text]
-            rw = rewrite_item(text, fws, missing, provider, local_endpoint, use_critic, model=model)
-        else:
-            rw = {
-                "original": text, "rewritten": text,
-                "reasoning": "Header or label line — no rewrite needed.",
-                "framework_used": "none",
-            }
+        rw = {
+            "original": text, "rewritten": text,
+            "reasoning": "Header or label line — no rewrite needed.",
+            "framework_used": "none",
+        }
         rw["id"] = unit["id"]
         rw["section"] = sec
         rw["line_indices"] = unit["line_indices"]
         rw["highlight_text"] = text
-        return sec, rw
+        return rw
 
     results_by_sec: dict[str, list[tuple[int, dict]]] = {}
-    workers = min(3 if use_critic else 8, max(len(jobs), 1))
+    eligible_jobs: list[tuple[str, int, dict]] = []
+    for sec, i, unit in jobs:
+        if unit["eligible"] and not _is_header(unit["text"], section=sec):
+            eligible_jobs.append((sec, i, unit))
+        else:
+            results_by_sec.setdefault(sec, []).append((i, _label_rw(sec, unit)))
+
+    # bundle eligible bullets into chunks so each LLM call rewrites several
+    # bullets at once instead of one call per bullet — this is the main lever
+    # on analysis latency, since round-trip/queueing cost dominates per call.
+    chunks = [eligible_jobs[k:k + _CHUNK_SIZE] for k in range(0, len(eligible_jobs), _CHUNK_SIZE)]
+
+    def _do_chunk(chunk_jobs):
+        items = [(unit["text"], fw_cache_local[unit["text"]]) for _sec, _i, unit in chunk_jobs]
+        chunk_results = rewrite_chunk(items, missing, provider, local_endpoint, use_critic, model=model)
+        out = []
+        for (sec, i, unit), rw in zip(chunk_jobs, chunk_results):
+            rw = dict(rw)
+            rw["id"] = unit["id"]
+            rw["section"] = sec
+            rw["line_indices"] = unit["line_indices"]
+            rw["highlight_text"] = unit["text"]
+            out.append((sec, i, rw))
+        return out
+
+    workers = min(3 if use_critic else 6, max(len(chunks), 1))
     t_rewrite = time.perf_counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_do_rewrite, sec, unit): (sec, i)
-            for sec, i, unit in jobs
-        }
+        futures = {pool.submit(_do_chunk, chunk): idx for idx, chunk in enumerate(chunks)}
         for fut in as_completed(futures):
-            sec, order_idx = futures[fut]
+            chunk_idx = futures[fut]
             try:
-                sec_name, rw = fut.result()
+                chunk_out = fut.result()
             except Exception as thread_err:
-                print(f"rewrite thread failed for {sec}: {thread_err}")
-                _, _, unit = next(
-                    (s, idx, u) for s, idx, u in jobs
-                    if s == sec and idx == order_idx
-                )
-                rw = {
-                    "original": unit["text"], "rewritten": unit["text"],
-                    "reasoning": "Rewrite skipped due to processing error.",
-                    "framework_used": "none",
-                    "id": unit["id"], "section": sec,
-                    "line_indices": unit["line_indices"],
-                    "highlight_text": unit["text"],
-                }
-                sec_name = sec
-            results_by_sec.setdefault(sec_name, []).append((order_idx, rw))
+                print(f"chunk rewrite thread failed: {thread_err}")
+                chunk_out = []
+                for sec, i, unit in chunks[chunk_idx]:
+                    rw = {
+                        "original": unit["text"], "rewritten": unit["text"],
+                        "reasoning": "Rewrite skipped due to processing error.",
+                        "framework_used": "none",
+                        "id": unit["id"], "section": sec,
+                        "line_indices": unit["line_indices"],
+                        "highlight_text": unit["text"],
+                    }
+                    chunk_out.append((sec, i, rw))
+            for sec, i, rw in chunk_out:
+                results_by_sec.setdefault(sec, []).append((i, rw))
     t_rewrite = time.perf_counter() - t_rewrite
 
     for sec, items in results_by_sec.items():
