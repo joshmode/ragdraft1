@@ -1,0 +1,26 @@
+# HTTPS overlay: adds a Caddy reverse proxy with automatic Let's Encrypt TLS.
+# Usage (with DOMAIN set in .env or exported in the shell):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d --build
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN to your site hostname, e.g. resumes.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  api:
+    environment:
+      FRONTEND_URL: https://${DOMAIN:-localhost}
+
+volumes:
+  caddy_data:
+  caddy_config:

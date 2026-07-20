@@ -4,6 +4,7 @@ import { authenticateToken } from "../middleware/auth.js"
 import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
+import { llmLimiter } from "../middleware/rateLimit.js"
 
 const router = Router()
 
@@ -15,7 +16,7 @@ function rejectLocalProvider(req, res) {
     return false
 }
 
-router.post("/cv", authenticateToken, async (req, res) => {
+router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
     if (rejectLocalProvider(req, res)) return
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
@@ -40,7 +41,7 @@ router.post("/cv", authenticateToken, async (req, res) => {
     }
 })
 
-router.post("/cover-letter", authenticateToken, async (req, res) => {
+router.post("/cover-letter", llmLimiter, authenticateToken, async (req, res) => {
     if (rejectLocalProvider(req, res)) return
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
@@ -83,6 +84,24 @@ async function exportDocument(req, res, path, type) {
         res.status(500).json({ error: `Document export failed: ${err.message}` })
     }
 }
+
+// Latest generated documents for an analysis, so the CV / cover letter tabs
+// can restore their content after navigation instead of forcing a regenerate.
+router.get("/latest", authenticateToken, (req, res) => {
+    const analysisId = parseInt(req.query.analysis_id)
+    if (!analysisId || !getOwnedAnalysis(analysisId, req.user.id)) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    const db = getDb()
+    const docs = {}
+    for (const type of ["cv", "cover_letter"]) {
+        const row = db.prepare(
+            "SELECT content, created_at FROM generated_documents WHERE analysis_id = ? AND user_id = ? AND document_type = ? ORDER BY created_at DESC, id DESC LIMIT 1"
+        ).get(analysisId, req.user.id, type)
+        if (row) docs[type] = { content: row.content, created_at: row.created_at }
+    }
+    res.json(docs)
+})
 
 router.post("/docx", authenticateToken, (req, res) => exportDocument(req, res, "export-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
 router.post("/pdf", authenticateToken, (req, res) => exportDocument(req, res, "export-pdf", "application/pdf"))

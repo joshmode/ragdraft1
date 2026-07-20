@@ -29,6 +29,6 @@ EXPOSE 5001
 # --max-requests recycles the worker periodically to bound any slow memory
 # creep from long-lived caches.
 CMD ["gunicorn", "--bind", "0.0.0.0:5001", \
-     "--workers", "1", "--threads", "4", "--worker-class", "gthread", \
-     "--timeout", "180", "--max-requests", "200", "--max-requests-jitter", "50", \
+     "--workers", "1", "--threads", "8", "--worker-class", "gthread", \
+     "--timeout", "300", "--max-requests", "200", "--max-requests-jitter", "50", \
      "engine_api:app"]

@@ -1,9 +1,80 @@
 import { Router } from "express"
 import { getDb } from "../db.js"
 import { authenticateToken, requireRole } from "../middleware/auth.js"
+import { canAccessAnalysis, mentorSessionForCandidate } from "../access.js"
 import crypto from "crypto"
 
 const router = Router()
+
+// classic LCS line diff — enough to show a resume revision like a small PR
+function diffLines(before, after) {
+    const n = before.length, m = after.length
+    const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+    for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+            lcs[i][j] = before[i] === after[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+        }
+    }
+    const out = []
+    let i = 0, j = 0
+    while (i < n && j < m) {
+        if (before[i] === after[j]) {
+            out.push({ type: "same", text: before[i] }); i++; j++
+        } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+            out.push({ type: "removed", text: before[i] }); i++
+        } else {
+            out.push({ type: "added", text: after[j] }); j++
+        }
+    }
+    while (i < n) out.push({ type: "removed", text: before[i++] })
+    while (j < m) out.push({ type: "added", text: after[j++] })
+    return out
+}
+
+// resume text as the candidate decided it: parsed sections with accepted
+// rewrite decisions applied, so the diff reflects real revisions rather than
+// raw parse noise.
+function appliedSections(results) {
+    const sections = results?.parsed_resume?.sections || results?.sections || {}
+    const rewrites = results?.rewrites || {}
+    const decisions = results?.decisions || {}
+    const out = {}
+    for (const [sec, lines] of Object.entries(sections)) {
+        const bySuggestion = {}
+        for (const item of rewrites[sec] || []) {
+            if (decisions[item.id] === true && Array.isArray(item.line_indices) && item.line_indices.length) {
+                bySuggestion[item.line_indices[0]] = item
+            }
+        }
+        const applied = []
+        let skipUntil = -1
+        lines.forEach((line, idx) => {
+            if (idx <= skipUntil) return
+            const item = bySuggestion[idx]
+            if (item) {
+                applied.push(item.rewritten || line)
+                skipUntil = Math.max(...item.line_indices)
+            } else {
+                applied.push(line)
+            }
+        })
+        out[sec] = applied
+    }
+    return out
+}
+
+function loadAnalysisWithDecisions(db, analysisId) {
+    const row = db.prepare("SELECT * FROM analyses WHERE id = ?").get(analysisId)
+    if (!row) return null
+    let results = {}
+    try { results = JSON.parse(row.results_json) } catch {}
+    const decisions = {}
+    for (const r of db.prepare("SELECT suggestion_key, decision FROM rewrite_decisions WHERE analysis_id = ?").all(analysisId)) {
+        decisions[r.suggestion_key] = r.decision === 1
+    }
+    results.decisions = decisions
+    return { row, results }
+}
 
 router.get("/dashboard", authenticateToken, requireRole("mentor"), (req, res) => {
     const db = getDb()
@@ -111,6 +182,148 @@ router.get("/session/:code/participants", authenticateToken, requireRole("mentor
     ).all(session.id)
 
     res.json(rows)
+})
+
+// Full history for one candidate: every analysis (score, provider, timing)
+// plus revision snapshots, so a mentor can walk the whole progression.
+router.get("/candidates/:candidateId/history", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const analyses = db.prepare(
+        "SELECT id, resume_id, score_total, provider, model, job_description, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
+    ).all(candidateId)
+    const snapshots = db.prepare(`
+        SELECT rs.id, rs.resume_id, rs.analysis_id, rs.decisions_json, rs.score_total, rs.created_at
+        FROM revision_snapshots rs JOIN analyses a ON a.id = rs.analysis_id
+        WHERE a.user_id = ? ORDER BY rs.created_at DESC LIMIT 100
+    `).all(candidateId)
+    res.json({
+        analyses,
+        revisions: snapshots.map(s => ({ ...s, decisions: JSON.parse(s.decisions_json || "{}") })),
+    })
+})
+
+// Full analysis detail for a mentored candidate (rewrites, decisions, score
+// breakdown) — same shape the candidate sees.
+router.get("/candidates/:candidateId/analyses/:analysisId", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const loaded = loadAnalysisWithDecisions(db, parseInt(req.params.analysisId))
+    if (!loaded || loaded.row.user_id !== candidateId) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    res.json({
+        id: loaded.row.id, score: loaded.row.score_total, provider: loaded.row.provider,
+        model: loaded.row.model, created_at: loaded.row.created_at, results: loaded.results,
+    })
+})
+
+// PR-style diff between two analyses of the same candidate: per-section line
+// diff of the resume text with each analysis's accepted decisions applied.
+router.get("/candidates/:candidateId/diff", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const from = loadAnalysisWithDecisions(db, parseInt(req.query.from))
+    const to = loadAnalysisWithDecisions(db, parseInt(req.query.to))
+    if (!from || !to || from.row.user_id !== candidateId || to.row.user_id !== candidateId) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    const beforeSections = appliedSections(from.results)
+    const afterSections = appliedSections(to.results)
+    const sectionNames = [...new Set([...Object.keys(beforeSections), ...Object.keys(afterSections)])]
+    const sections = sectionNames.map(name => ({
+        section: name,
+        diff: diffLines(beforeSections[name] || [], afterSections[name] || []),
+    }))
+    res.json({
+        from: { id: from.row.id, score: from.row.score_total, created_at: from.row.created_at },
+        to: { id: to.row.id, score: to.row.score_total, created_at: to.row.created_at },
+        sections,
+    })
+})
+
+// Mentor creates feedback: either a plain comment or a suggested edit
+// (original_text -> suggested_text) the candidate can accept or dismiss.
+router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) => {
+    const { candidate_id, analysis_id, suggestion_key, feedback_type, section, original_text, suggested_text, comment } = req.body
+    const candidateId = parseInt(candidate_id)
+    const session = mentorSessionForCandidate(req.user.id, candidateId)
+    if (!session) {
+        return res.status(404).json({ error: "Candidate not found in your active review sessions." })
+    }
+    const type = feedback_type === "edit" ? "edit" : "comment"
+    if (type === "edit" && !String(suggested_text || "").trim()) {
+        return res.status(400).json({ error: "Edit suggestions need suggested text." })
+    }
+    if (type === "comment" && !String(comment || "").trim()) {
+        return res.status(400).json({ error: "Comment cannot be empty." })
+    }
+    const analysisId = analysis_id ? parseInt(analysis_id) : null
+    if (analysisId && !canAccessAnalysis(analysisId, req.user)) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    const db = getDb()
+    const row = db.prepare(`
+        INSERT INTO mentor_feedback
+            (session_id, mentor_id, candidate_id, analysis_id, suggestion_key, feedback_type, section, original_text, suggested_text, comment, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).run(
+        session.id, req.user.id, candidateId, analysisId, String(suggestion_key || ""),
+        type, String(section || ""), String(original_text || ""), String(suggested_text || ""), String(comment || ""),
+    )
+    res.status(201).json({ id: row.lastInsertRowid })
+})
+
+// Mentor's sent feedback (optionally per candidate) with current status.
+router.get("/feedback", authenticateToken, requireRole("mentor"), (req, res) => {
+    const db = getDb()
+    const candidateId = req.query.candidate_id ? parseInt(req.query.candidate_id) : null
+    const rows = candidateId
+        ? db.prepare(`
+            SELECT mf.*, u.display_name AS candidate_name FROM mentor_feedback mf
+            JOIN users u ON u.id = mf.candidate_id
+            WHERE mf.mentor_id = ? AND mf.candidate_id = ? ORDER BY mf.created_at DESC LIMIT 200
+          `).all(req.user.id, candidateId)
+        : db.prepare(`
+            SELECT mf.*, u.display_name AS candidate_name FROM mentor_feedback mf
+            JOIN users u ON u.id = mf.candidate_id
+            WHERE mf.mentor_id = ? ORDER BY mf.created_at DESC LIMIT 200
+          `).all(req.user.id)
+    res.json(rows)
+})
+
+// Candidate's inbox: all feedback addressed to them, newest first.
+router.get("/feedback/inbox", authenticateToken, (req, res) => {
+    const db = getDb()
+    const rows = db.prepare(`
+        SELECT mf.*, u.display_name AS mentor_name FROM mentor_feedback mf
+        JOIN users u ON u.id = mf.mentor_id
+        WHERE mf.candidate_id = ? ORDER BY mf.created_at DESC LIMIT 200
+    `).all(req.user.id)
+    res.json(rows)
+})
+
+// Candidate resolves a feedback item (accepted / dismissed / open).
+router.post("/feedback/:id/status", authenticateToken, (req, res) => {
+    const status = String(req.body.status || "")
+    if (!["open", "accepted", "dismissed"].includes(status)) {
+        return res.status(400).json({ error: "Status must be open, accepted, or dismissed." })
+    }
+    const db = getDb()
+    const result = db.prepare(
+        "UPDATE mentor_feedback SET status = ?, updated_at = datetime('now') WHERE id = ? AND candidate_id = ?"
+    ).run(status, parseInt(req.params.id), req.user.id)
+    if (!result.changes) return res.status(404).json({ error: "Feedback not found." })
+    res.json({ ok: true })
 })
 
 router.get("/report", authenticateToken, requireRole("mentor"), (req, res) => {

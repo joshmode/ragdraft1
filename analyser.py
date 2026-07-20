@@ -599,12 +599,14 @@ def analyse(
 ) -> dict:
     t_start = time.perf_counter()
 
+    # keyword extraction is an LLM round trip while unit-building and RAG
+    # retrieval below are purely local — run them concurrently so the network
+    # wait overlaps the local work instead of preceding it.
     t_kw = time.perf_counter()
-    jd_kws = extract_jd_kws(job_description, provider, local_endpoint, model=model) if job_description.strip() else []
-    t_kw = time.perf_counter() - t_kw
-
-    resume_lower = resume.raw_text.lower()
-    missing = [kw for kw in jd_kws if not _kw_in_resume(kw, resume_lower)]
+    kw_future = None
+    kw_pool = ThreadPoolExecutor(max_workers=1)
+    if job_description.strip():
+        kw_future = kw_pool.submit(extract_jd_kws, job_description, provider, local_endpoint, model)
 
     rewrites: dict[str, list[dict]] = {}
 
@@ -641,6 +643,19 @@ def analyse(
             if text not in fw_cache_local:
                 fw_cache_local[text] = query_fw(text, n_results=2)
     t_retrieval = time.perf_counter() - t_retrieval
+
+    # join the keyword extraction started before the local work
+    jd_kws: list[str] = []
+    if kw_future is not None:
+        try:
+            jd_kws = kw_future.result()
+        except Exception as kw_err:
+            print(f"kw extraction failed: {kw_err}")
+    kw_pool.shutdown(wait=False)
+    t_kw = time.perf_counter() - t_kw
+
+    resume_lower = resume.raw_text.lower()
+    missing = [kw for kw in jd_kws if not _kw_in_resume(kw, resume_lower)]
 
     def _label_rw(sec, unit):
         text = unit["text"]
@@ -681,7 +696,7 @@ def analyse(
             out.append((sec, i, rw))
         return out
 
-    workers = min(3 if use_critic else 6, max(len(chunks), 1))
+    workers = min(3 if use_critic else 8, max(len(chunks), 1))
     t_rewrite = time.perf_counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_do_chunk, chunk): idx for idx, chunk in enumerate(chunks)}
@@ -814,48 +829,69 @@ def gen_cv(
         for line in applied:
             cv_text += line + "\n"
 
-    acc_ctx = "\n".join(f"- {it.get('original')} -> {it.get('rewritten')}" for it in acc_items) or "None"
-    dis_ctx = "\n".join(f"- {it.get('original')} -> {it.get('rewritten')}" for it in dis_items) or "None"
+    # the resume text above is the single source of truth: accepted rewrites
+    # are already applied to it and dismissed ones already reverted, so the
+    # model never needs to (and must not) re-litigate those decisions. We
+    # deliberately do NOT show it the dismissed rewrite text — showing it is
+    # exactly what used to leak dismissed suggestions back into the output.
+    section_names = list(resume.sections.keys())
+    section_list = ", ".join(section_names) if section_names else "the sections present in the resume"
 
     sys_prompt = (
-        "You are an expert CV writer. Generate a professional, ATS-friendly CV from the candidate's resume. "
-        "Use accepted rewrite decisions as the candidate's preferred wording. "
-        "For dismissed rewrite suggestions, use the ORIGINAL text verbatim — do not apply any part of the suggested rewrite. "
-        "Never invent employers, dates, credentials, projects, metrics, or skills not present in the original resume. "
-        "Every bullet point must be grounded in information explicitly provided in the candidate's resume. "
+        "You are an expert CV formatter and editor. Reformat the candidate's resume into a "
+        "professional, ATS-friendly CV in Markdown. The resume text you receive is FINAL: "
+        "every bullet already reflects the candidate's accepted wording decisions. "
+        "Preserve the meaning and content of every bullet — you may tighten grammar and phrasing, "
+        "but never drop a role, project, qualification, or section, and never re-order facts between roles. "
+        "Never invent employers, dates, credentials, projects, metrics, or skills not present in the resume. "
         "Write in a grounded, professional tone. Avoid corporate fluff. "
         f"\n\nBANNED WORDS (never use these): {_BANNED_WORDS}\n"
         "\nFORMATTING RULES — follow these exactly:\n"
         "1. Output ONLY the final CV in Markdown format, nothing else.\n"
-        "2. The CV MUST fit within 2 pages (~600–750 words). Be concise.\n"
+        f"2. Include EVERY one of these sections, each with all of its content: {section_list}. "
+        "Do not omit or merge any of them. If content is long, keep it — a 2-page CV is fine.\n"
         "3. Start with the candidate's name as # Name.\n"
         "4. Contact details on a single line separated by ` | `.\n"
         "5. Each section: ## SECTION NAME in ALL CAPS, followed by `---`.\n"
         "6. Job/project titles as ### or **_Title_**, dates on the same line after `|`.\n"
-        "7. All bullets start with a strong ATS action verb in past tense.\n"
-        "8. Limit 2–4 bullets per role. Cut ruthlessly.\n"
-        "9. Sections order: Contact, Summary, Experience, Education, Skills, Projects, Certifications.\n"
+        "7. Bullets start with a strong ATS action verb in past tense where the original does.\n"
+        "8. Keep every bullet from the source resume. Only trim a bullet if it is redundant "
+        "within the same role, and never remove more than one bullet per role.\n"
+        "9. Section order: Summary first (if present), then Experience, Education, Skills, "
+        "Projects, then all remaining sections in their original order. Every section listed "
+        "in rule 2 MUST appear.\n"
         "10. No preamble, no explanation — CV text only."
     )
 
     jd_block = (
-        f"JOB DESCRIPTION:\n{job_description}\n\n" if has_jd
+        f"JOB DESCRIPTION (for emphasis and keyword alignment only — do not fabricate skills to match it):\n{job_description}\n\n" if has_jd
         else "JOB DESCRIPTION:\nNone provided. Optimise for clarity, impact, and ATS readability.\n\n"
     )
     usr_prompt = (
         jd_block +
-        f"ACCEPTED REWRITE DECISIONS:\n{acc_ctx}\n\n"
-        f"DISMISSED REWRITE DECISIONS:\n{dis_ctx}\n\n"
-        f"CANDIDATE RESUME:\n{cv_text}\n\n"
-        "Generate the complete tailored CV in Markdown format. "
-        "CRITICAL: ≤ 750 words. Every bullet starts with a strong action verb."
+        f"CANDIDATE RESUME (final wording — reformat, do not rewrite decisions):\n{cv_text}\n\n"
+        "Generate the complete CV in Markdown format now, containing every section listed in the rules."
     )
 
     try:
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=4096)
-        return raw.strip()
+                       model=model, max_tokens=8192)
+        result = raw.strip()
+
+        # verify no section silently vanished; if one did, append it verbatim
+        # from the source text so the output is never missing content.
+        missing_secs = [
+            sec for sec in section_names
+            if sec.upper() not in result.upper()
+        ]
+        for sec in missing_secs:
+            lines = resume.sections.get(sec, [])
+            if not lines:
+                continue
+            applied, _, _ = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions)
+            result += f"\n\n## {sec}\n---\n" + "\n".join(f"- {line}" for line in applied)
+        return result
     except Exception as e:
         print(f"cv generation failed: {e}")
         return f"CV generation failed: {e}"

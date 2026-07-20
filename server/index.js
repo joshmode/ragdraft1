@@ -74,7 +74,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api", generalLimiter)
 app.use("/api/auth", authLimiter, authRoutes)
 app.use("/api/analysis/run", llmLimiter)
-app.use("/api/generate", llmLimiter, generationRoutes)
+app.use("/api/generate", generationRoutes)
 app.use("/api/analysis", analysisRoutes)
 app.use("/api/mentor", mentorRoutes)
 app.use("/api/annotations", annotationRoutes)

@@ -33,7 +33,7 @@ The compose deployment persists application records in `data/` and ChromaDB data
 - asynchronous analysis jobs, per-provider limits, critic timeouts, critic status reporting, and a paired critic benchmark runner;
 - PDF, DOCX, ODT, text, Markdown, and LinkedIn export ZIP parsing;
 - score history, section scores, readability heatmaps, accepted-rewrite records, and consented evaluation feedback;
-- mentor accounts, candidate review sessions, annotations, revision snapshots, and mentor reports;
+- mentor accounts with a full review workspace: candidate analysis history, per-analysis drill-down (rewrites + the candidate's accept/dismiss decisions), PR-style diffs between any two resume revisions, and a feedback channel where mentors send comments or concrete edit suggestions that candidates accept or dismiss from their inbox;
 - saved job descriptions, job matching, LinkedIn public-profile import, tailored CV/cover-letter generation, and DOCX/PDF export.
 
 Run the critic benchmark with a JSON fixture:
@@ -149,23 +149,19 @@ runs on Render/Railway/Fly.io if you prefer a managed platform).
    your real domain, e.g. `FRONTEND_URL=https://resumes.example.com`. It
    accepts a comma-separated list if you need more than one origin (e.g. a
    staging domain).
-3. **Start the production stack** (disables local-key-write and local model
-   endpoints, which only make sense for a single trusted local user):
+3. **Set your domain** in `.env`:
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   DOMAIN=resumes.example.com
    ```
-   This exposes the `api` service on port 3000, which serves both the built
-   React app and `/api/*`.
-4. **Put TLS in front of it.** The simplest option is
-   [Caddy](https://caddyserver.com/), which handles Let's Encrypt
-   certificates automatically. A minimal `Caddyfile`:
+4. **Start the production stack with HTTPS** — the bundled Caddy overlay
+   terminates TLS with automatic Let's Encrypt certificates and proxies to
+   the app (the API itself is bound to loopback, so only Caddy is public):
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.https.yml up -d --build
    ```
-   resumes.example.com {
-       reverse_proxy localhost:3000
-   }
-   ```
-   Run Caddy on the host (or as another container on the same Docker
-   network) and open ports 80/443 instead of 3000 to the public internet.
+   Open ports 80 and 443 in your host's firewall/security group. Caddy
+   obtains and renews certificates automatically as long as the DNS record
+   points at the machine.
 5. **Verify**: `curl https://resumes.example.com/api/health` should return
    `{"status":"ok",...}`.
 

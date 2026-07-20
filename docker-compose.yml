@@ -35,7 +35,10 @@ services:
       ALLOW_MENTOR_REGISTRATION: "true"
       ALLOW_LOCAL_PROVIDER: "true"
     ports:
-      - "3000:3000"
+      # bound to loopback so the API is only reachable from the host (or via
+      # the Caddy HTTPS proxy in docker-compose.https.yml), never raw over
+      # the public internet. Local use is unchanged: http://localhost:3000
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/app/data
     depends_on:

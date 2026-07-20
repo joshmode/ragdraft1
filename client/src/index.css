@@ -94,7 +94,8 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 }
 .card:hover { box-shadow: 0 4px 12px rgba(13,15,17,0.07); }
 
-.score-ring-wrap { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 0; }
+/* score reads top-down: big number, tier label directly under it, then hint */
+.score-stack { display: flex; flex-direction: column; align-items: center; gap: 0.2rem; padding: 0.4rem 0 0.25rem; text-align: center; }
 .score-number {
     font-family: 'Instrument Serif', serif;
     font-size: 4rem;
@@ -105,9 +106,8 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 .score-label-text {
     font-family: 'Instrument Serif', serif;
     font-weight: 400;
-    font-size: 0.95rem;
+    font-size: 1.05rem;
     font-style: normal;
-    color: #0D0F11;
     letter-spacing: 0.02em;
 }
 .score-sub, .muted { font-size: 0.8rem; color: #6B7280; }
@@ -158,6 +158,16 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 }
 .contact-chip:hover, .status-chip:hover { background: #E8EAED; }
 .contact-chip b { color: #6B7280; font-weight: 700; margin-right: 0.25rem; }
+/* long values (emails, URLs) wrap inside the chip instead of spilling out */
+.contact-chip {
+    max-width: 100%;
+    border-radius: 12px;
+    text-align: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+.contact-chip .contact-value { overflow-wrap: anywhere; }
 
 .pdf-shell {
     background: #2D3136;
@@ -503,7 +513,32 @@ select.input-field {
 .key-card { border-color: rgba(139,92,246,0.35); }
 .auth-page { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
 .auth-tab { background: transparent; border: 0; font-family: 'DM Sans', sans-serif; }
-.sidebar-close { background: transparent; color: #F7F8FA; border: 0; cursor: pointer; float: right; font-family: 'DM Sans', sans-serif; }
+
+/* sidebar header: identity + sign out pinned at the very top with breathing
+   room so it never collides with the score card below it */
+.sidebar-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.35rem 0 1.4rem;
+}
+.sidebar-user { font-size: 0.78rem; color: #A1A5AB; overflow-wrap: anywhere; }
+.sidebar-user b { color: #F7F8FA; }
+.btn-signout {
+    background: rgba(255,255,255,0.08);
+    color: #F7F8FA;
+    border: 1px solid #3C4148;
+    border-radius: 8px;
+    padding: 0.4rem 0.85rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.btn-signout:hover { background: rgba(255,255,255,0.16); }
 .ok-text { color: #15C39A !important; }
 .error-text { color: #E5534B !important; }
 .review-nav { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
@@ -570,6 +605,81 @@ select.input-field {
     margin-top: 0.25rem;
 }
 
+/* ---- review controls ---- */
+.review-toolbar { margin-bottom: 1.1rem; }
+.toolbar-spacer { flex: 1; }
+.status-chip.accepted-chip { border-color: rgba(21,195,154,0.4); color: #12A884; background: #E6F8F3; }
+.status-chip.dismissed-chip { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
+.btn-arrow { padding: 0.55rem 0.9rem; font-size: 1rem; line-height: 1; flex-shrink: 0; }
+.suggestion-jump { flex: 1; min-width: 0; font-size: 0.8rem; }
+.decision-actions { display: flex; gap: 0.75rem; margin-top: 0.9rem; }
+.decision-actions .btn-primary, .decision-actions .btn-secondary { flex: 1; }
+
+/* ---- diff viewer (PR-style) ---- */
+.diff-block {
+    margin-top: 0.75rem;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid #E8EAED;
+    border-radius: 10px;
+    overflow: hidden;
+}
+.diff-line { display: flex; gap: 0.5rem; padding: 0.12rem 0.6rem; }
+.diff-line.added { background: #E6F8F3; color: #065F46; }
+.diff-line.removed { background: #fef2f2; color: #991b1b; text-decoration: line-through; text-decoration-color: rgba(153,27,27,0.35); }
+.diff-line.same { color: #4B5563; }
+.diff-sign { flex-shrink: 0; width: 1ch; font-weight: 700; }
+
+/* ---- mentor workspace & feedback ---- */
+.detail-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.1rem; }
+.detail-title { font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 1.5rem; }
+.btn-small { padding: 0.32rem 0.7rem; font-size: 0.75rem; }
+.session-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
+.session-code { font-family: ui-monospace, Menlo, monospace; font-size: 1rem; color: #7c3aed; letter-spacing: 0.06em; }
+.mentor-suggestion { border-top: 1px solid #F0F1F3; padding-top: 0.7rem; margin-top: 0.7rem; }
+.feedback-list { display: flex; flex-direction: column; gap: 0.85rem; margin-top: 0.25rem; }
+.feedback-item { margin-bottom: 0; }
+.feedback-item.accepted { border-color: rgba(21,195,154,0.45); }
+.feedback-item.dismissed { opacity: 0.65; }
+.feedback-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
+.feedback-comment { font-size: 0.85rem; line-height: 1.55; margin-top: 0.6rem; }
+.status-chip.status-accepted { border-color: rgba(21,195,154,0.4); color: #12A884; background: #E6F8F3; }
+.status-chip.status-dismissed { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
+.status-chip.status-open { border-color: rgba(139,92,246,0.35); color: #7c3aed; background: rgba(139,92,246,0.08); }
+
+.composer { margin-top: 1.1rem; }
+.composer-row { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
+.composer-row .input-field { min-width: 0; }
+.composer-type { max-width: 180px; flex-shrink: 0; }
+.composer-area { min-height: 74px; margin-bottom: 0.6rem; }
+.composer-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.35rem; }
+
+/* ---- layout & spacing polish ---- */
+.topbar { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; margin-bottom: 1.25rem; }
+.topbar-inline { display: inline-flex; align-items: center; gap: 0.75rem; margin-left: auto; }
+.doc-subhead { font-family: 'Instrument Serif', serif; font-weight: 400; margin: 1.4rem 0 0.6rem; }
+.btn-block-gap { margin-top: 0.75rem; }
+.scrape-row { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
+.model-bar { flex-wrap: wrap; row-gap: 0.75rem; }
+section > .section-label { margin-top: 0.25rem; }
+.card > .btn-secondary + .muted { margin-top: 0.5rem; }
+details.card > summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.04em;
+}
+.prelim-panels { margin-top: 0.9rem; display: grid; gap: 1rem; }
+.prelim-panels .card { margin-bottom: 0; }
+.evaluation-card .toggle-wrap { margin-bottom: 0.85rem; font-size: 0.84rem; }
+.evaluation-card textarea { margin-bottom: 0.35rem; }
+.key-card .two-col { align-items: center; }
+.history-list small { text-align: right; }
+.export-row .btn-dark { flex: 0 0 auto; }
+
 @media (max-width: 900px) {
     .app-container { padding: 1rem; }
     .hero-wrap { border-radius: 0 0 18px 18px; padding: 2rem 1rem 1.25rem; }
@@ -583,4 +693,9 @@ select.input-field {
     .model-bar { align-items: stretch; flex-direction: column; }
     .model-bar select { min-width: 0; }
     .annotation-input { flex-direction: column; }
+    .composer-row { flex-direction: column; }
+    .composer-type { max-width: none; }
+    .decision-actions { flex-direction: column; }
+    .detail-head { flex-wrap: wrap; }
+    .scrape-row { grid-template-columns: 1fr; }
 }
