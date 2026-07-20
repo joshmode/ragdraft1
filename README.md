@@ -46,6 +46,41 @@ python3 critic_benchmark.py path/to/fixture.json
 not used by Docker, `docker-compose.yml`, or any deploy path below — the
 supported app is `client/` + `server/` + `engine_api.py`.
 
+## How rate limiting works
+
+If the UI shows "Too many requests. Please slow down and try again shortly."
+— that message comes from `server/middleware/rateLimit.js`, i.e. the app's
+*own* Express rate limiter, not a raw 429 from Gemini/OpenAI/Anthropic. It
+has three separate buckets so unrelated traffic doesn't share one budget:
+
+- `generalLimiter` — a floor on all `/api/*` traffic (600 req/15 min/IP).
+- `pollLimiter` — a much tighter window (90 req/min) but its own separate
+  budget for the cheap, high-frequency reads: job-status polling while an
+  analysis runs, and PDF re-highlighting as you click through suggestions.
+- `authLimiter` / `llmLimiter` — brute-force protection on login, and abuse
+  protection on the endpoints that spend LLM API budget.
+
+Every 429 from any of these includes a `retry_after` (seconds) in the JSON
+body and a standard `Retry-After` header. The frontend's axios client
+(`client/src/api/client.js`) automatically retries on 429 with exponential
+backoff + jitter before ever surfacing an error, so a momentary limit is
+invisible to the user in the common case. The same pattern exists at two
+more layers for genuine upstream provider rate limits:
+
+- `router.py`'s `llm_call` retries an individual LLM call up to 5 times with
+  exponential backoff + jitter on a provider 429/5xx.
+- `server/engineClient.js`'s `fetchEngineWithRetry` retries a whole
+  `/analyse` (or `/gen-cv`, `/gen-cover-letter`, `/compare-resume-jd`) call
+  if the engine itself reports a 429 after exhausting its own retries, so a
+  transient provider outage doesn't fail the job outright.
+
+Two more things reduce how often any of this gets exercised in the first
+place: `analyser.py` batches bullets into one LLM call per chunk instead of
+one per bullet (see below), and `POST /api/analysis/run` skips the LLM
+entirely and returns an existing result if you re-run the exact same resume
++ job description + provider/model/critic combination within
+`ANALYSIS_CACHE_TTL_MINUTES` (default 60) — set it to `0` to disable.
+
 ## Why analysis got faster
 
 The engine used to send one LLM request per resume bullet — a 20-bullet

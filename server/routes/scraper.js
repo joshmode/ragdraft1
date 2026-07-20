@@ -3,6 +3,7 @@ import fetch from "node-fetch"
 import { authenticateToken } from "../middleware/auth.js"
 import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
+import { fetchEngineWithRetry } from "../engineClient.js"
 
 const router = Router()
 
@@ -88,7 +89,7 @@ router.post("/compare", authenticateToken, async (req, res) => {
     }
     const engineUrl = req.app.locals.engineUrl
     try {
-        const engineRes = await fetch(`${engineUrl}/compare-resume-jd`, {
+        const engineRes = await fetchEngineWithRetry(`${engineUrl}/compare-resume-jd`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(req.body),

@@ -1,11 +1,25 @@
 import { Router } from "express"
 import multer from "multer"
+import crypto from "crypto"
 import fetch from "node-fetch"
 import { getDb } from "../db.js"
 import { authenticateToken } from "../middleware/auth.js"
 import { canAccessAnalysis, getOwnedAnalysis, getOwnedResume } from "../access.js"
+import { pollLimiter } from "../middleware/rateLimit.js"
+import { fetchEngineWithRetry } from "../engineClient.js"
 
 const router = Router()
+const ANALYSIS_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
+
+// Re-running the exact same resume + job description + provider/model +
+// critic setting produces the exact same result, so we key a short-lived
+// cache on all of it — re-clicking "Analyse" without changing anything skips
+// the LLM entirely instead of burning API quota on identical output.
+function analysisContentHash({ resumeId, jobDescription, provider, model, useCritic }) {
+    return crypto.createHash("sha256")
+        .update(`${resumeId}|${provider || ""}|${model || ""}|${useCritic ? "1" : "0"}|${jobDescription || ""}`)
+        .digest("hex")
+}
 const allowedExtensions = new Set([".pdf", ".docx", ".doc", ".odt", ".txt", ".md", ".zip"])
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -64,7 +78,12 @@ async function processAnalysis(engineUrl, jobId, payload) {
     const db = getDb()
     db.prepare("UPDATE analysis_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(jobId)
     try {
-        const analyseRes = await fetch(`${engineUrl}/analyse`, {
+        // fetchEngineWithRetry rides out a transient provider rate limit (the
+        // engine already retries individual LLM calls internally — this
+        // covers the case where the whole analysis exhausts those retries)
+        // with exponential backoff + jitter, so a busy provider doesn't fail
+        // the job outright and force the user to manually retry.
+        const analyseRes = await fetchEngineWithRetry(`${engineUrl}/analyse`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -74,11 +93,15 @@ async function processAnalysis(engineUrl, jobId, payload) {
         results.parsed_resume = payload.resume_json
         results.job_description = payload.job_description || ""
         const scoreTotal = typeof results.score === "object" ? results.score.total || 0 : results.score || 0
+        const contentHash = analysisContentHash({
+            resumeId: payload.resume_id, jobDescription: payload.job_description,
+            provider: payload.provider, model: payload.model, useCritic: payload.use_critic,
+        })
         const row = db.prepare(
-            "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+            "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
         ).run(
             payload.resume_id, payload.user_id, JSON.stringify(results), payload.job_description || "",
-            payload.provider || "", payload.model || "", scoreTotal,
+            payload.provider || "", payload.model || "", scoreTotal, contentHash,
         )
         results.analysis_id = row.lastInsertRowid
         results.resume_id = payload.resume_id
@@ -105,6 +128,20 @@ router.post("/run", authenticateToken, (req, res) => {
 
     const payload = { resume_id: resumeId, user_id: req.user.id, resume_json, job_description, provider, model, use_critic, local_endpoint }
     const db = getDb()
+
+    if (ANALYSIS_CACHE_TTL_MINUTES > 0) {
+        const contentHash = analysisContentHash({ resumeId, jobDescription: job_description, provider, model, useCritic: use_critic })
+        const cached = db.prepare(
+            `SELECT id FROM analyses WHERE user_id = ? AND content_hash = ? AND content_hash != '' AND created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 1`
+        ).get(req.user.id, contentHash, `-${ANALYSIS_CACHE_TTL_MINUTES} minutes`)
+        if (cached) {
+            const cachedRow = db.prepare(
+                "INSERT INTO analysis_jobs (resume_id, user_id, request_json, status, analysis_id, created_at, updated_at) VALUES (?, ?, ?, 'completed', ?, datetime('now'), datetime('now'))"
+            ).run(resumeId, req.user.id, JSON.stringify(payload), cached.id)
+            return res.status(202).json({ job_id: cachedRow.lastInsertRowid, status: "queued" })
+        }
+    }
+
     const row = db.prepare(
         "INSERT INTO analysis_jobs (resume_id, user_id, request_json, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', datetime('now'), datetime('now'))"
     ).run(resumeId, req.user.id, JSON.stringify(payload))
@@ -112,7 +149,7 @@ router.post("/run", authenticateToken, (req, res) => {
     res.status(202).json({ job_id: row.lastInsertRowid, status: "queued" })
 })
 
-router.get("/jobs/:jobId", authenticateToken, (req, res) => {
+router.get("/jobs/:jobId", pollLimiter, authenticateToken, (req, res) => {
     const db = getDb()
     const job = db.prepare("SELECT * FROM analysis_jobs WHERE id = ? AND user_id = ?").get(req.params.jobId, req.user.id)
     if (!job) return res.status(404).json({ error: "Analysis job not found." })
@@ -125,7 +162,7 @@ router.get("/jobs/:jobId", authenticateToken, (req, res) => {
     res.json({ id: job.id, status: job.status, error: job.error || "" })
 })
 
-router.post("/highlight", authenticateToken, async (req, res) => {
+router.post("/highlight", pollLimiter, authenticateToken, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
     try {
         const engineRes = await fetch(`${engineUrl}/highlight-pdf`, {

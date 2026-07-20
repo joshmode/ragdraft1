@@ -1,4 +1,5 @@
 import os
+import random
 import time
 import threading
 import requests
@@ -152,14 +153,18 @@ def llm_call(
             last_err = e
             err_str = str(e).lower()
             if attempt < max_retries - 1:
+                # exponential backoff with jitter — jitter spreads out retries
+                # from concurrent requests so they don't all land on the
+                # provider in the same instant and immediately re-trip the
+                # rate limit that caused the retry in the first place.
                 if any(x in err_str for x in ["429", "too many requests", "quota"]):
-                    time.sleep(10 * (attempt + 1))
+                    time.sleep(min(60, 4 * (2 ** attempt)) + random.uniform(0, 1))
                     continue
                 elif any(x in err_str for x in ["500", "503", "unavailable", "timeout", "internal error", "name resolution", "errno -3", "connection"]):
-                    time.sleep(2 ** (attempt + 1))
+                    time.sleep(min(30, 2 ** (attempt + 1)) + random.uniform(0, 1))
                     continue
                 elif "none" in err_str and attempt == 0:
-                    time.sleep(2)
+                    time.sleep(2 + random.uniform(0, 1))
                     continue
             break
 
