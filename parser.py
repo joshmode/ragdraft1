@@ -1,25 +1,35 @@
 # pyrefly
 import fitz
+import importlib.util
 import re
-import numpy as np
 import csv
 import io
 import zipfile
 from dataclasses import dataclass, field
 
-try:
-    import easyocr
-    import pdf2image
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
+# easyocr pulls in torch (700MB+ of RSS once imported) and pdf2image needs
+# poppler. Importing them eagerly at module load means every engine process —
+# including gunicorn workers that never touch a scanned PDF — pays that
+# memory cost on startup, which is what was causing OOM SIGKILLs. We only
+# check *availability* via find_spec (cheap, doesn't execute the module) and
+# defer the actual `import easyocr` / `import pdf2image` / `import numpy`
+# until a scanned PDF genuinely needs OCR.
+def _ocr_installed() -> bool:
+    return (
+        importlib.util.find_spec("easyocr") is not None
+        and importlib.util.find_spec("pdf2image") is not None
+        and importlib.util.find_spec("numpy") is not None
+    )
 
-# easyocr Reader is expensive to init
+
+# easyocr Reader is expensive to init — keep it as a per-process singleton
+# once it has been loaded, but never load it until OCR is actually run.
 _reader = None
 
 def _get_reader():
     global _reader
     if _reader is None:
+        import easyocr
         _reader = easyocr.Reader(["en"], gpu=False)  # gpu=True if you have cuda gpu eg nvidia rtx serise
     return _reader
 
@@ -215,8 +225,11 @@ def _is_scan(lines: list[str]) -> bool:
     return len(useful) < 10
 
 def _ocr_fallback(raw: bytes) -> list[str]:
-    if not OCR_AVAILABLE:
+    if not _ocr_installed():
         return []
+
+    import numpy as np
+    import pdf2image
 
     reader = _get_reader()
     images = pdf2image.convert_from_bytes(raw, dpi=300)
@@ -445,7 +458,7 @@ def parse_pdf(pdf_file) -> ParsedResume:
     doc.close()
 
     if _is_scan(all_lines):
-        if not OCR_AVAILABLE:
+        if not _ocr_installed():
             result.warnings.append("PDF appears scanned but easyocr isn't installed. \n Run: pip install easyocr pdf2image Pillow numpy \n Also install poppler for pdf2image, open README for instructions")
             return result
 
