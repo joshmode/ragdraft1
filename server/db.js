@@ -38,6 +38,7 @@ function initDb(db) {
             provider TEXT DEFAULT '',
             model TEXT DEFAULT '',
             score_total INTEGER DEFAULT 0,
+            content_hash TEXT DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (resume_id) REFERENCES resumes(id),
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -143,6 +144,15 @@ function initDb(db) {
             FOREIGN KEY (analysis_id) REFERENCES analyses(id)
         );
     `)
+
+    // CREATE TABLE IF NOT EXISTS above is a no-op on a database that already
+    // has an `analyses` table from before content_hash existed, so add it
+    // here idempotently for databases created before this column existed.
+    const columns = db.prepare("PRAGMA table_info(analyses)").all().map(col => col.name)
+    if (!columns.includes("content_hash")) {
+        db.exec("ALTER TABLE analyses ADD COLUMN content_hash TEXT DEFAULT ''")
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_analyses_content_hash ON analyses(content_hash)")
 }
 
 export function getDb() {

@@ -3,6 +3,7 @@ import fetch from "node-fetch"
 import { authenticateToken } from "../middleware/auth.js"
 import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
+import { fetchEngineWithRetry } from "../engineClient.js"
 
 const router = Router()
 
@@ -21,7 +22,7 @@ router.post("/cv", authenticateToken, async (req, res) => {
     }
     const engineUrl = req.app.locals.engineUrl
     try {
-        const engineRes = await fetch(`${engineUrl}/gen-cv`, {
+        const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cv`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(req.body),
@@ -46,7 +47,7 @@ router.post("/cover-letter", authenticateToken, async (req, res) => {
     }
     const engineUrl = req.app.locals.engineUrl
     try {
-        const engineRes = await fetch(`${engineUrl}/gen-cover-letter`, {
+        const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cover-letter`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(req.body),
