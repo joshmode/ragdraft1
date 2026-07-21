@@ -433,7 +433,7 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
         }
     }
 
-    return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">✏️ Edit Your {title}</h3><textarea className="input-field document-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
+    return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">✏️ Edit Your {title}</h3><textarea className="input-field document-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
 }
 
 function Analytics({ result, history }) {
@@ -586,7 +586,7 @@ function CandidateDetail({ candidate, onBack }) {
                     </tr>)}
                     {!analyses.length && <tr><td colSpan={4} className="muted">No analyses yet.</td></tr>}
                 </tbody></table></div>
-                <span className="section-label">Compare Revisions (like a pull request)</span>
+                <span className="section-label">Compare Revisions</span>
                 <div className="card">
                     <div className="composer-row">
                         <select className="input-field" value={diffFrom} onChange={e => setDiffFrom(e.target.value)}>
