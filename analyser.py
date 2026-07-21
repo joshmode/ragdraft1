@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from datetime import date
 from dotenv import load_dotenv
 
 from vector_db import query_fw
@@ -67,7 +68,11 @@ def _parse_json(raw: str) -> Any:
 
 
 def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str = "", api_key: str = "") -> list[str]:
-    """pull technical keywords from a job description via llm."""
+    """pull technical keywords from a job description via llm.
+
+    Raises on failure (rate limit, timeout, malformed response) instead of swallowing the
+    error - the caller needs to tell "no JD was given" apart from "extraction failed", since
+    both would otherwise look identical to the frontend as an empty jd_keywords list."""
     if not job_desc.strip():
         return []
 
@@ -79,13 +84,9 @@ def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str
         f"Job description:\n{job_desc}"
     )
 
-    try:
-        raw = llm_call(user_prompt=prompt, provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=1024, api_key=api_key)
-        return _parse_json(raw)
-    except Exception as e:
-        print(f"kw extraction failed: {e}")
-        return []
+    raw = llm_call(user_prompt=prompt, provider=provider, local_endpoint=local_endpoint,
+                   model=model, max_tokens=1024, api_key=api_key)
+    return _parse_json(raw)
 
 
 _QUANT_RE = re.compile(r'(?<!\w)(?:\$?\d+(?:\.\d+)?(?:[%xX])?|\d+(?:\.\d+)?\s*(?:users?|people|clients?|customers?|hours?|days?|weeks?|months?|years?))(?!\w)', re.IGNORECASE)
@@ -673,11 +674,13 @@ def analyse(
 
     # join the keyword extraction started before the local work
     jd_kws: list[str] = []
+    kw_extraction_failed = False
     if kw_future is not None:
         try:
             jd_kws = kw_future.result()
         except Exception as kw_err:
             print(f"kw extraction failed: {kw_err}")
+            kw_extraction_failed = True
     kw_pool.shutdown(wait=False)
     t_kw = time.perf_counter() - t_kw
 
@@ -767,6 +770,7 @@ def analyse(
         "jd_keywords":         jd_kws,
         "missing_keywords":    missing,
         "keyword_frequencies": freqs,
+        "keyword_extraction_failed": kw_extraction_failed,
         "score":               score,
         "warnings":            resume.warnings,
         "ocr_used":            resume.ocr_used,
@@ -941,7 +945,8 @@ def gen_cover_letter(
         "1. Output ONLY the cover letter in Markdown format, nothing else.\n"
         "2. 300–400 words (3–4 paragraphs).\n"
         "3. Start with # Name, contact on one line via ` | `.\n"
-        "4. Today's date on its own line.\n"
+        "4. The exact date given below (DATE TO USE) on its own line, formatted like 'January 1, 2025'. "
+        "Never invent or guess a different date.\n"
         "5. Opening: hook, mention role/company, state fit.\n"
         "6. Body (1–2 paras): highlight relevant experience with specific examples.\n"
         "7. Closing: enthusiasm, call to action, thanks.\n"
@@ -955,6 +960,7 @@ def gen_cover_letter(
     )
 
     usr_prompt = (
+        f"DATE TO USE: {date.today().strftime('%B %-d, %Y')}\n\n" +
         jd_block +
         f"CANDIDATE RESUME:\n{resume_text}\n\n"
         "Generate the complete cover letter in Markdown format. "
