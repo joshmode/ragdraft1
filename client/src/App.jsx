@@ -14,7 +14,7 @@ const PROVIDER_OPTIONS = [
 ]
 
 const NAV_ITEMS = [
-    "Rewrite Suggestions", "Keyword Gap", "Extracted Sections", "Tailored CV",
+    "Suggestions", "Keyword Gap", "Extracted Sections", "Tailored CV",
     "Cover Letter", "Mentor Feedback", "Analytics", "Job Matching",
 ]
 
@@ -22,6 +22,16 @@ function getScoreCfg(score) {
     if (score >= 70) return { color: "#15C39A", label: "Strong" }
     if (score >= 50) return { color: "#E8A735", label: "Needs work" }
     return { color: "#E5534B", label: "Needs improvement" }
+}
+
+// continuous red -> yellow -> green, driven by a section's actual quality %, not 3 fixed buckets.
+// quality is never really 0 for a graded section (worst case is every bullet red, which floors
+// out around 33%), so stretch that realistic [33,100] range across the full hue range instead
+// of a raw 0-100 -> 0-120 map, which would leave even the weakest sections looking orange-ish.
+function heatColor(quality) {
+    const normalised = Math.max(0, Math.min(100, ((quality || 0) - 33) / 0.67))
+    const hue = Math.round(normalised * 1.2)
+    return `hsl(${hue}, 70%, 45%)`
 }
 
 function getError(err) {
@@ -127,7 +137,7 @@ function AuthPage() {
                         </label>
                     </>}
                     {error && <p className="error-msg">{error}</p>}
-                    <button className="btn-primary full-width" disabled={busy}>{busy ? "Please wait..." : tab === "login" ? "Sign In" : "Create Account"}</button>
+                    <button className="btn-primary full-width auth-submit-btn" disabled={busy}>{busy ? "Please wait..." : tab === "login" ? "Sign In" : "Create Account"}</button>
                 </form>
             </section>
         </main>
@@ -190,7 +200,8 @@ function ScoreCard({ scoreData }) {
         `Action Verbs: +${scoreData.action_verbs || 0}`,
         `Warnings: ${scoreData.warnings || 0}`,
         `Total: ${score}/100`,
-    ].join("\n") : "Score breakdown not available"
+    ] : ["Score breakdown not available"]
+    const sectionScores = (typeof scoreData === "object" && scoreData?.section_scores) || {}
 
     return <div className="card score-card">
         <span className="section-label">Resume Score</span>
@@ -204,7 +215,19 @@ function ScoreCard({ scoreData }) {
                 </div>
                 <span className="score-sub">out of 100 · hover for breakdown</span>
             </div>
-            <div className="score-tooltip">{lines}</div>
+            <div className="score-tooltip">
+                {lines.map(line => <div key={line}>{line}</div>)}
+                {Object.keys(sectionScores).length > 0 && <>
+                    <div className="tooltip-divider" />
+                    <div className="tooltip-heat-label">Section strength</div>
+                    {Object.entries(sectionScores).map(([sec, data]) => (
+                        <div className="tooltip-heat-row" key={sec}>
+                            <span className="heat-swatch" style={{ background: heatColor(data.quality) }} />
+                            <span>{sec[0] + sec.slice(1).toLowerCase()}</span>
+                        </div>
+                    ))}
+                </>}
+            </div>
         </div>
     </div>
 }
@@ -456,7 +479,7 @@ function Analytics({ result, history }) {
         }
     }
 
-    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><div className="section-score-grid">{Object.entries(sectionScores).map(([section, data]) => <div className="metric-card card" key={section}><div className="metric-value">{data.quality}%</div><div className="metric-label">{section}</div></div>)}</div><h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
+    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><p className="muted">How strong each section's writing is — green means well-written, red means it needs work.</p><div className="heatmap-grid">{Object.entries(sectionScores).map(([section, data]) => <div className="heatmap-cell" key={section} style={{ background: heatColor(data.quality) }}><span className="heatmap-cell-name">{section[0] + section.slice(1).toLowerCase()}</span><span className="heatmap-cell-value">{data.quality}%</span></div>)}</div><h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
 }
 
 function DiffView({ diff }) {
@@ -745,9 +768,15 @@ function JobMatching({ result, provider, localEndpoint }) {
         } catch (err) { setError(getError(err)) }
     }
     async function compare() {
+        setError("")
         try {
             const res = await api.post("/scrape/compare", { resume_text: result.raw_text || "", jd_text: scraped || result.job_description || "", provider, local_endpoint: localEndpoint, job_id: jobId, analysis_id: result.analysis_id })
-            setComparison(res.data)
+            if (res.data.error) {
+                setError(`Comparison failed: ${res.data.error}`)
+                setComparison(null)
+            } else {
+                setComparison(res.data)
+            }
         } catch (err) { setError(getError(err)) }
     }
     async function scrapeLinkedIn() {
@@ -775,7 +804,7 @@ function App() {
     const [analysisId, setAnalysisId] = useState(null)
     const [decisions, setDecisions] = useState({})
     const [docs, setDocs] = useState({ cv: "", cover_letter: "" })
-    const [view, setView] = useState("Rewrite Suggestions")
+    const [view, setView] = useState("Suggestions")
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const [history, setHistory] = useState([])
@@ -839,7 +868,7 @@ function App() {
             setResult({ ...completed, parsed_resume: upload.data.parsed, job_description: jobDescription, raw_text: upload.data.parsed.raw_text })
             setAnalysisId(completed.analysis_id)
             setDecisions({})
-            setView("Rewrite Suggestions")
+            setView("Suggestions")
             // restore any docs already generated for this analysis so tabs don't wipe them
             try {
                 const docsRes = await api.get(`/generate/latest?analysis_id=${completed.analysis_id}`)
@@ -909,7 +938,7 @@ function App() {
             <div className="workspace-main">
                 <nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>
                 <div className="fade-in" key={view}>
-                    {view === "Rewrite Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}
+                    {view === "Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}
                     {view === "Keyword Gap" && <KeywordGap result={result} />}
                     {view === "Extracted Sections" && <ExtractedSections result={result} />}
                     {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} />}

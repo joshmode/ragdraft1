@@ -79,6 +79,12 @@ def _element_to_text(el) -> str:
     def walk(node):
         name = getattr(node, "name", None)
         if name is None:
+            # stray text directly inside a container that also has a <ul>/<h*>/etc. sibling -
+            # that container falls through to the recursion below instead of the leaf-text
+            # branch, so this text needs capturing here or it silently vanishes
+            text = " ".join(str(node).split())
+            if text:
+                parts.append(text)
             return
         if name in ("script", "style", "nav", "noscript"):
             return
@@ -310,22 +316,11 @@ def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpo
     )
 
     try:
-        import json
+        from analyser import _parse_json
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
                        model=model, max_tokens=1024, api_key=api_key)
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.splitlines()
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines).strip()
-        match = re.search(r'(\{.*\})', cleaned, re.DOTALL)
-        if match:
-            cleaned = match.group(1)
-        return json.loads(cleaned)
+        return _parse_json(raw)
     except Exception as e:
         return {"match_pct": 0, "missing_skills": [], "strong_matches": [],
                 "tailoring_tips": [], "error": str(e)}

@@ -149,15 +149,20 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     padding: 0.75rem 1rem;
     font-size: 0.76rem;
     font-family: 'DM Sans', sans-serif;
-    white-space: pre;
+    white-space: nowrap;
     line-height: 1.7;
     z-index: 999;
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
     pointer-events: none;
     transition: opacity 0.18s ease, visibility 0.18s ease;
     min-width: 200px;
+    text-align: left;
 }
 .score-tooltip-wrap:hover .score-tooltip { visibility: visible; opacity: 1; }
+.tooltip-divider { height: 1px; background: #3C4148; margin: 0.5rem 0; }
+.tooltip-heat-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: #A1A5AB; margin-bottom: 0.3rem; }
+.tooltip-heat-row { display: flex; align-items: center; gap: 0.45rem; line-height: 1.5; }
+.heat-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; display: inline-block; }
 .score-tooltip-wrap .score-tooltip::after {
     content: '';
     position: absolute;
@@ -350,10 +355,10 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 
 .nav-bar {
     background: linear-gradient(135deg, #0a0a0f 0%, #111827 45%, #172554 100%);
-    padding: 0.45rem 0.55rem;
+    padding: 0.4rem 0.5rem;
     border-radius: 16px;
     border: 1px solid rgba(139,92,246,0.25);
-    gap: 0.4rem;
+    gap: 0.3rem;
     margin: 0 auto 1.25rem;
     width: min(100%, 1180px);
     display: flex;
@@ -370,7 +375,7 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 .fade-in { animation: fadeIn 0.3s ease; }
 .nav-pill {
     background: rgba(255,255,255,0.06);
-    padding: 0.55rem 0.85rem;
+    padding: 0.5rem 0.6rem;
     border-radius: 10px;
     transition: all 0.18s ease;
     flex: 0 0 auto;
@@ -380,8 +385,8 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     color: #ffffff;
     font-family: 'Instrument Serif', serif;
     font-weight: 400;
-    font-size: 0.95rem;
-    letter-spacing: 0.02em;
+    font-size: 0.88rem;
+    letter-spacing: 0.01em;
     white-space: nowrap;
 }
 .nav-pill:hover {
@@ -536,6 +541,7 @@ select.input-field {
 .form-group label { display: block; font-size: 0.78rem; font-weight: 600; color: #6B7280; margin-bottom: 0.35rem; }
 .error-msg { color: #E5534B; font-size: 0.82rem; margin-top: 0.5rem; }
 .success-msg { color: #15C39A; font-size: 0.82rem; margin-top: 0.5rem; }
+.auth-submit-btn { margin-top: 0.75rem; }
 
 .model-bar {
     display: flex; align-items: center; gap: 1.5rem; margin-bottom: 1rem;
@@ -592,7 +598,21 @@ select.input-field {
 .history-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid #E8EAED; }
 .history-list > div:last-child { border-bottom: 0; }
 .history-list small { color: #6B7280; }
-.section-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; }
+.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.heatmap-cell {
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+    color: #FFFFFF;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: transform 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+.heatmap-cell:hover { transform: scale(1.03); }
+.heatmap-cell-name { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.heatmap-cell-value { font-family: 'Instrument Serif', serif; font-size: 1.6rem; }
 .mentor-table { overflow-x: auto; }
 .mentor-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .mentor-table th, .mentor-table td { padding: 0.65rem; border-bottom: 1px solid #E8EAED; text-align: left; }
