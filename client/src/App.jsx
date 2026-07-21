@@ -459,15 +459,23 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">✏️ Edit Your {title}</h3><textarea className="input-field document-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
 }
 
+const SECTION_ORDER = [
+    "EXPERIENCE", "PROJECTS", "EDUCATION", "SKILLS", "SUMMARY", "CERTIFICATIONS",
+    "AWARDS", "PUBLICATIONS", "VOLUNTEER", "LANGUAGES", "INTERESTS", "REFERENCES",
+]
+
 function Analytics({ result, history }) {
-    const score = result.score || {}
-    const sectionScores = score.section_scores || {}
     const timing = result.timing || {}
     const [consent, setConsent] = useState(false)
     const [confidence, setConfidence] = useState("")
     const [comment, setComment] = useState("")
     const [submitted, setSubmitted] = useState(false)
     const [error, setError] = useState("")
+    const [overview, setOverview] = useState(null)
+
+    useEffect(() => {
+        api.get("/analysis/analytics/overview").then(res => setOverview(res.data.analyses || [])).catch(() => setOverview([]))
+    }, [])
 
     async function submitFeedback() {
         setError("")
@@ -479,7 +487,15 @@ function Analytics({ result, history }) {
         }
     }
 
-    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><p className="muted">How strong each section's writing is — green means well-written, red means it needs work.</p><div className="heatmap-grid">{Object.entries(sectionScores).map(([section, data]) => <div className="heatmap-cell" key={section} style={{ background: heatColor(data.quality) }}><span className="heatmap-cell-name">{section[0] + section.slice(1).toLowerCase()}</span><span className="heatmap-cell-value">{data.quality}%</span></div>)}</div><h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
+    const sectionCols = overview ? (() => {
+        const present = new Set(overview.flatMap(a => Object.keys(a.score?.section_scores || {})))
+        return [...SECTION_ORDER.filter(s => present.has(s)), ...[...present].filter(s => !SECTION_ORDER.includes(s)).sort()]
+    })() : []
+
+    return <section><span className="section-label">User Analytics Dashboard</span><h3 className="doc-subhead">Resume Score History</h3><div className="card history-list">{history.length ? history.map((item, index) => <div key={item.id || index}><b>Attempt {history.length - index}</b><span>{item.score}/100</span><small>{String(item.created_at || "").slice(0, 16)}</small></div>) : <p className="muted">Run more analyses to see score progression.</p>}</div><h3 className="doc-subhead">Readability &amp; Quality Heatmap</h3><p className="muted">How strong each section's writing has been across your attempts — green means well-written, red means it needs work. Each row is one attempt, oldest first.</p>{overview && overview.length > 0 && sectionCols.length > 0 ? <div className="heatmap-table-wrap"><table className="heatmap-table"><thead><tr><th>Attempt</th>{sectionCols.map(sec => <th key={sec}>{sec[0] + sec.slice(1).toLowerCase()}</th>)}</tr></thead><tbody>{overview.map((a, idx) => <tr key={a.id}><td className="heatmap-row-label"><b>#{idx + 1}</b><small>{String(a.created_at || "").slice(0, 10)}</small></td>{sectionCols.map(sec => {
+        const cell = a.score?.section_scores?.[sec]
+        return <td key={sec}>{cell ? <span className="heatmap-table-cell" style={{ background: heatColor(cell.quality) }}>{cell.quality}%</span> : <span className="heatmap-table-cell empty">—</span>}</td>
+    })}</tr>)}</tbody></table></div> : <p className="muted">{overview ? "Run more analyses to build up the heatmap." : "Loading…"}</p>}<h3 className="doc-subhead">Performance Metrics</h3><div className="three-col">{Object.entries(timing).map(([key, value]) => <div className="metric-card card" key={key}><div className="metric-value">{value}ms</div><div className="metric-label">{key.replace("_ms", "")}</div></div>)}</div><div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div></section>
 }
 
 function DiffView({ diff }) {
