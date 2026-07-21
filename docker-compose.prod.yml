@@ -3,6 +3,7 @@ services:
     environment:
       CRITIC_SAME_AS_MAIN: "false"
       CRITIC_PROVIDER: groq
+      CRITIC_MODEL: openai/gpt-oss-120b
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./data:/app/data

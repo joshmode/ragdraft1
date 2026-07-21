@@ -32,13 +32,15 @@ The provider dropdown has five options:
 
 **Per-user "Own Key" storage is real bring-your-own-key, not shared state.** Each user's key is encrypted (AES-256-GCM, keyed by `KEY_ENCRYPTION_SECRET`) and stored against their account in SQLite. It's decrypted server-side only at the moment of an LLM call, for that one user's request, and is never written to a shared file, env var, or returned to any client. Two users can each save a different Gemini key and their requests never cross — this replaced an earlier design that wrote every saved key into one shared file, which meant whoever saved a key last silently became the key everyone's requests used.
 
-There's no model dropdown anymore — each provider always uses its current flagship "latest" model, configured server-side (`GEMINI_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`, `OPENAI_DEFAULT_MODEL`, `GROQ_DEFAULT_MODEL` in `.env`). Double-check these against each provider's current docs before deploying — model IDs are a moving target and the shipped defaults may drift out of date.
+There's no model dropdown anymore — each provider always uses its current flagship "latest" model, configured server-side (`GEMINI_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`, `OPENAI_DEFAULT_MODEL`, `GROQ_DEFAULT_MODEL` in `.env`). The pooled Groq tier defaults to `qwen/qwen3.6-27b`. Double-check these against each provider's current docs before deploying — model IDs are a moving target and the shipped defaults may drift out of date.
 
 **Local LLM** only works if the *server* can reach the endpoint — not the visitor's own laptop. A website can't reach into a stranger's home network by default. Running the app locally, `localhost:11434` (Ollama's default port) resolves correctly since browser and server are the same machine. On a hosted deployment, a user who wants to use their own local model needs to expose it with a tunnel (ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that public URL into the endpoint field — the UI explains this inline.
 
 ### The critic (agentic self-correction) has its own, separate provider
 
 Turning on "Agentic Self-Correction" runs a second LLM pass that checks each rewrite for invented numbers. By default that critic call uses whatever provider/key the main request used (`CRITIC_SAME_AS_MAIN=true`). Set it to `false` and the critic always uses `CRITIC_PROVIDER` + `CRITIC_API_KEY` instead, regardless of what the user picked for the main analysis — so you can run every critic check on one fixed, cheap/fast provider (Groq) even when a BYOK user's main request goes to Claude or ChatGPT. Leave `CRITIC_API_KEY` unset to just reuse that provider's normal pooled key (e.g. the same `GROQ_API_KEY`). `docker-compose.prod.yml` pins this to Groq by default; local/dev use is `true` (same-as-main) unless you change it in `.env`.
+
+`CRITIC_MODEL` is independent of that same-as-main toggle — it always overrides just the *model*, never the provider/key, so the critic can run a different (typically cheaper/faster) model from the main agent even while sharing its credentials. The shipped default is `openai/gpt-oss-120b` against the main agent's `qwen/qwen3.6-27b`, both served by Groq.
 
 ## Services
 

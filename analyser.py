@@ -108,12 +108,14 @@ def _has_new_claims(original: str, rewritten: str) -> bool:
 def _critic_creds(provider: str, model: str, api_key: str, local_endpoint: str) -> tuple[str, str, str, str]:
     # CRITIC_SAME_AS_MAIN=false pins the critic to CRITIC_PROVIDER/CRITIC_API_KEY instead
     if os.environ.get("CRITIC_SAME_AS_MAIN", "true").lower() == "false":
-        return (
-            os.environ.get("CRITIC_PROVIDER", "groq"),
-            os.environ.get("CRITIC_MODEL", ""),
-            os.environ.get("CRITIC_API_KEY", ""),
-            os.environ.get("CRITIC_LOCAL_ENDPOINT", ""),
-        )
+        provider = os.environ.get("CRITIC_PROVIDER", "groq")
+        api_key = os.environ.get("CRITIC_API_KEY", "")
+        local_endpoint = os.environ.get("CRITIC_LOCAL_ENDPOINT", "")
+        model = os.environ.get("CRITIC_MODEL", "")
+    elif os.environ.get("CRITIC_MODEL"):
+        # same provider/key as the main request, but the critic can still run its own
+        # (usually cheaper/faster) model instead of inheriting whatever the main agent used
+        model = os.environ["CRITIC_MODEL"]
     return provider, model, api_key, local_endpoint
 
 
