@@ -35,9 +35,16 @@ _DEFAULT_MODELS = {
     "gemini":     os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
     "claude":     os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
     "chatgpt":    os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-4o"),
-    "openrouter": os.environ.get("OPENROUTER_DEFAULT_MODEL", "openai/gpt-oss-20b:free"),
+    "openrouter": os.environ.get("OPENROUTER_DEFAULT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"),
     "groq":       os.environ.get("GROQ_DEFAULT_MODEL", "qwen/qwen3.6-27b"),
     "local":      os.environ.get("LOCAL_DEFAULT_MODEL", "llama3"),
+}
+
+# if a pinned free-tier model gets pulled mid-deployment (as qwen3.6-plus:free did), fall back
+# to OpenRouter's own auto-router across whatever free models are still live, instead of just
+# failing outright. Only openrouter needs this - the other providers are stable paid APIs.
+_FALLBACK_MODELS = {
+    "openrouter": os.environ.get("OPENROUTER_FALLBACK_MODEL", "openrouter/free"),
 }
 
 
@@ -100,15 +107,44 @@ def llm_call(
     timeout: int = 120,
     api_key: str = "",
 ) -> str:
-    """routes prompt to chosen llm. api_key, if given, is used only for this one call - never touches os.environ"""
+    """routes prompt to chosen llm. api_key, if given, is used only for this one call - never
+    touches os.environ. if the resolved model fails outright (retries exhausted), falls back to
+    this provider's configured fallback model (see _FALLBACK_MODELS) instead of just erroring."""
     provider = provider.lower()
-    last_err = None
 
     if not local_endpoint:
         local_endpoint = _default_local_endpoint()
 
     if provider not in _PROVIDER_LOCKS:
         raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    resolved_model = model or _DEFAULT_MODELS[provider]
+    try:
+        return _dispatch(provider, user_prompt, system_prompt, resolved_model,
+                          max_tokens, local_endpoint, max_retries, timeout, api_key)
+    except Exception as primary_err:
+        fallback_model = _FALLBACK_MODELS.get(provider, "")
+        if not fallback_model or fallback_model == resolved_model:
+            raise
+        print(f"{provider} call failed on '{resolved_model}' after {max_retries} attempt(s), "
+              f"falling back to '{fallback_model}': {primary_err}")
+        return _dispatch(provider, user_prompt, system_prompt, fallback_model,
+                          max_tokens, local_endpoint, max_retries, timeout, api_key)
+
+
+def _dispatch(
+    provider: str,
+    user_prompt: str,
+    system_prompt: str,
+    model: str,
+    max_tokens: int,
+    local_endpoint: str,
+    max_retries: int,
+    timeout: int,
+    api_key: str,
+) -> str:
+    """one model, with its own retry loop for transient errors - no fallback here, llm_call orchestrates that"""
+    last_err = None
 
     for attempt in range(max_retries):
         try:
@@ -122,7 +158,7 @@ def llm_call(
                         api_key=key,
                         http_options=types.HttpOptions(timeout=timeout * 1000),
                     )
-                    mdl = model or _DEFAULT_MODELS["gemini"]
+                    mdl = model
 
                     cfg_kw = {"max_output_tokens": max_tokens}
                     if system_prompt: cfg_kw["system_instruction"] = system_prompt
@@ -145,7 +181,7 @@ def llm_call(
                 elif provider == "claude":
                     import anthropic
                     key = _resolve_key("Claude", "ANTHROPIC_API_KEY", api_key)
-                    mdl = model or _DEFAULT_MODELS["claude"]
+                    mdl = model
                     client = anthropic.Anthropic(api_key=key, timeout=timeout)
                     msg = client.messages.create(
                         model=mdl,
@@ -159,7 +195,7 @@ def llm_call(
                 elif provider == "chatgpt":
                     import openai
                     key = _resolve_key("ChatGPT", "OPENAI_API_KEY", api_key)
-                    mdl = model or _DEFAULT_MODELS["chatgpt"]
+                    mdl = model
                     client = openai.OpenAI(api_key=key, timeout=timeout)
                     res = client.chat.completions.create(
                         model=mdl,
@@ -176,7 +212,7 @@ def llm_call(
                     # openrouter's api is openai-compatible, reuse the sdk with a different base_url
                     import openai
                     key = _resolve_key("OpenRouter", "OPENROUTER_API_KEY", api_key)
-                    mdl = model or _DEFAULT_MODELS["openrouter"]
+                    mdl = model
                     client = openai.OpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", timeout=timeout)
                     res = client.chat.completions.create(
                         model=mdl,
@@ -194,7 +230,7 @@ def llm_call(
                     # groq's api is openai-compatible, reuse the sdk with a different base_url
                     import openai
                     key = _resolve_key("Groq", "GROQ_API_KEY", api_key)
-                    mdl = model or _DEFAULT_MODELS["groq"]
+                    mdl = model
                     client = openai.OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1", timeout=timeout)
                     res = client.chat.completions.create(
                         model=mdl,
@@ -210,7 +246,7 @@ def llm_call(
                 elif provider == "local":
                     if not _is_local_endpoint(local_endpoint):
                         raise ValueError("Local endpoint isn't allowed (blocked internal/metadata address).")
-                    mdl = model or _DEFAULT_MODELS["local"]
+                    mdl = model
                     payload = {
                         "model": mdl,
                         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
