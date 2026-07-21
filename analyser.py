@@ -559,6 +559,11 @@ def calc_score(resume: ParsedResume, jd_kws: list[str], missing: list[str], rewr
     verb_hits = 0
     section_scores: dict[str, dict] = {}
 
+    # the heatmap grades every bullet the model actually looked at (its severity call on the
+    # ORIGINAL text), whether or not a rewrite was applied - a section full of bullets rated
+    # "already great, nothing to change" is a strong section, not an absent one. The global
+    # bullet_quality/action_verbs score below stays exactly as before: only bullets that were
+    # actually rewritten count toward it.
     for sec_name, items in rewrites.items():
         sec_qual = 0
         sec_count = 0
@@ -567,30 +572,35 @@ def calc_score(resume: ParsedResume, jd_kws: list[str], missing: list[str], rewr
         for item in items:
             if item.get("framework_used") in ("none", "error"):
                 continue
-            if item.get("original") == item.get("rewritten"):
-                continue
-            actionable_n += 1
             sec_count += 1
             sev = item.get("severity", "yellow")
             sev_counts[sev] = sev_counts.get(sev, 0) + 1
-            if sev == "green":
-                qual += 2
-                sec_qual += 3
-            elif sev == "yellow":
-                qual += 1
-                sec_qual += 2
-            else:
-                sec_qual += 1
+            sec_qual += {"green": 3, "yellow": 2, "red": 1}.get(sev, 1)
             lead_word = item.get("rewritten", "").split()[0].lower().rstrip(".,;:") if item.get("rewritten", "").strip() else ""
             if lead_word in _ACTION_VERBS:
-                verb_hits += 1
                 sec_verbs += 1
+
+            changed = item.get("original") != item.get("rewritten")
+            if changed:
+                actionable_n += 1
+                qual += {"green": 2, "yellow": 1, "red": 0}.get(sev, 0)
+                if lead_word in _ACTION_VERBS:
+                    verb_hits += 1
         if sec_count > 0:
             section_scores[sec_name] = {
                 "quality": min(100, int((sec_qual / (sec_count * 3)) * 100)),
                 "verb_ratio": round(sec_verbs / sec_count, 2),
                 "severity_counts": sev_counts,
                 "bullet_count": sec_count,
+            }
+
+    # sections with content but nothing gradable (e.g. a plain SKILLS list) shouldn't just
+    # vanish from the heatmap - show them as healthy since nothing was flagged as weak
+    for sec_name in resume.sections:
+        if sec_name != "HEADER" and sec_name not in section_scores:
+            section_scores[sec_name] = {
+                "quality": 100, "verb_ratio": 0,
+                "severity_counts": {"red": 0, "yellow": 0, "green": 0}, "bullet_count": 0,
             }
 
     bd["bullet_quality"] = min(10, qual)
