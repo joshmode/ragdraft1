@@ -13,10 +13,12 @@ const router = Router()
 const ANALYSIS_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
 const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
 
-// same resume+jd+provider+critic = same result, so cache on it and skip the LLM
-function analysisContentHash({ resumeId, jobDescription, provider, model, useCritic }) {
+// same resume+jd+provider+critic+endpoint = same result, so cache on it and skip the LLM.
+// localEndpoint has to be part of the key: for provider "local" it's what actually picks
+// the model, and two different endpoints must never share a cached result.
+function analysisContentHash({ resumeId, jobDescription, provider, model, useCritic, localEndpoint }) {
     return crypto.createHash("sha256")
-        .update(`${resumeId}|${provider || ""}|${model || ""}|${useCritic ? "1" : "0"}|${jobDescription || ""}`)
+        .update(`${resumeId}|${provider || ""}|${model || ""}|${useCritic ? "1" : "0"}|${localEndpoint || ""}|${jobDescription || ""}`)
         .digest("hex")
 }
 const allowedExtensions = new Set([".pdf", ".docx", ".doc", ".odt", ".txt", ".md", ".zip"])
@@ -101,6 +103,7 @@ async function processAnalysis(engineUrl, jobId, payload) {
         const contentHash = analysisContentHash({
             resumeId: payload.resume_id, jobDescription: payload.job_description,
             provider: payload.provider, model: "", useCritic: payload.use_critic,
+            localEndpoint: payload.local_endpoint,
         })
         const row = db.prepare(
             "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
@@ -146,7 +149,7 @@ router.post("/run", authenticateToken, (req, res) => {
     const db = getDb()
 
     if (ANALYSIS_CACHE_TTL_MINUTES > 0) {
-        const contentHash = analysisContentHash({ resumeId, jobDescription: job_description, provider, model: "", useCritic: use_critic })
+        const contentHash = analysisContentHash({ resumeId, jobDescription: job_description, provider, model: "", useCritic: use_critic, localEndpoint: local_endpoint })
         const cached = db.prepare(
             `SELECT id FROM analyses WHERE user_id = ? AND content_hash = ? AND content_hash != '' AND created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 1`
         ).get(req.user.id, contentHash, `-${ANALYSIS_CACHE_TTL_MINUTES} minutes`)

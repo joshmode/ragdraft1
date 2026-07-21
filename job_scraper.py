@@ -1,7 +1,7 @@
 import re
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import requests
 
 try:
@@ -53,6 +53,32 @@ def _safe_public_url(url: str) -> bool:
         return True
     except Exception:
         return False
+
+
+_MAX_REDIRECTS = 5
+
+
+def _safe_get(url: str, **kwargs) -> requests.Response:
+    """requests.get() with every redirect hop re-validated against _safe_public_url.
+
+    A remote server that passes the initial check can otherwise respond with a redirect
+    (e.g. 302 to http://169.254.169.254/...) that requests follows transparently, handing
+    an SSRF attacker cloud metadata or internal-only services under a legitimate-looking
+    public HTTPS URL. Following redirects manually here closes that gap."""
+    kwargs.pop("allow_redirects", None)
+    current_url = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        if not _safe_public_url(current_url):
+            raise ValueError(f"Blocked non-public redirect target: {current_url}")
+        resp = requests.get(current_url, allow_redirects=False, **kwargs)
+        if resp.is_redirect or resp.is_permanent_redirect:
+            location = resp.headers.get("Location")
+            if not location:
+                return resp
+            current_url = urljoin(current_url, location)
+            continue
+        return resp
+    raise ValueError("Too many redirects")
 
 
 _JD_HEADER_RE = re.compile(
@@ -152,7 +178,7 @@ def scrape_jd(url: str) -> str:
     if not _safe_public_url(url):
         return "Only public HTTPS job-description URLs are supported."
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=15)
+        resp = _safe_get(url, headers=_HEADERS, timeout=15)
         resp.raise_for_status()
         text = _extract_jd_from_html(resp.text)
         if len(text) > 200:
@@ -165,6 +191,9 @@ def scrape_jd(url: str) -> str:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
+                page.route("**/*", lambda route: route.abort()
+                           if route.request.resource_type == "document" and not _safe_public_url(route.request.url)
+                           else route.continue_())
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(3000)
                 html_text = page.content()
@@ -219,7 +248,7 @@ def scrape_linkedin_profile(url: str) -> dict:
     # plain request first - linkedin serves crawler-visible og: meta tags for public profiles
     html_text = ""
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=15, allow_redirects=True)
+        resp = _safe_get(url, headers=_HEADERS, timeout=15)
         html_text = resp.text
         if not _looks_like_authwall(html_text, str(resp.url)):
             meta = _profile_from_meta(html_text)
@@ -233,6 +262,9 @@ def scrape_linkedin_profile(url: str) -> dict:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
+                page.route("**/*", lambda route: route.abort()
+                           if route.request.resource_type == "document" and not _safe_public_url(route.request.url)
+                           else route.continue_())
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(3000)
                 content = page.content()

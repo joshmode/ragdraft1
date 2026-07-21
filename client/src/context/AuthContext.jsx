@@ -6,7 +6,15 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(() => {
         const stored = localStorage.getItem("rtr_user")
-        return stored ? JSON.parse(stored) : null
+        if (!stored) return null
+        try {
+            return JSON.parse(stored)
+        } catch {
+            // corrupted/partial write - drop it instead of crashing every render forever
+            localStorage.removeItem("rtr_user")
+            localStorage.removeItem("rtr_token")
+            return null
+        }
     })
     const [loading, setLoading] = useState(false)
 
