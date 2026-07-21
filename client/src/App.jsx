@@ -153,7 +153,7 @@ function AuthPage() {
                 </form>
                 <div className="auth-guest-row">
                     <button type="button" className="auth-guest-link" disabled={busy} onClick={guestContinue}>Continue without an account</button>
-                    <p className="muted auth-guest-note">Guest sessions aren't saved — your resumes and analysis won't be kept once you leave.</p>
+                    <p className="muted auth-guest-note">Guest sessions aren't tied to an account — you won't be able to sign back in to this session, and any uploaded resumes and analysis are automatically deleted from our servers within 24 hours.</p>
                 </div>
             </section>
         </main>

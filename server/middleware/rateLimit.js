@@ -38,6 +38,17 @@ export const authLimiter = rateLimit({
     handler: rateLimitHandler("Too many authentication attempts. Please try again later."),
 })
 
+// guest-session creation has no credentials to get wrong, so it always "succeeds" - unlike
+// login/register, skipping successful requests here would leave it effectively unlimited,
+// and each call does a cost-12 bcrypt hash plus a permanent row insert
+export const guestLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: rateLimitHandler("Too many guest sessions started from this connection. Please wait a while, or create an account instead."),
+})
+
 // analysis/generation burns API budget, not just CPU - worth protecting most
 export const llmLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,

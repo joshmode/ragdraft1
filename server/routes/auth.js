@@ -1,8 +1,9 @@
 import { Router } from "express"
 import bcrypt from "bcrypt"
 import crypto from "crypto"
-import { getDb } from "../db.js"
+import { getDb, deleteExpiredGuests } from "../db.js"
 import { generateToken, authenticateToken } from "../middleware/auth.js"
+import { guestLimiter } from "../middleware/rateLimit.js"
 
 const router = Router()
 
@@ -83,9 +84,16 @@ router.post("/login", async (req, res) => {
 // account is created so every existing per-user feature - caching, decisions, generated
 // docs, tab-switch restore - works unmodified. The frontend keeps this session in
 // sessionStorage rather than localStorage, so nothing lets the guest come back to it
-// later - that's what "no record kept for guests" means in practice here.
-router.post("/guest", async (req, res) => {
+// later, and their DB rows are actually deleted after GUEST_RETENTION_HOURS (see db.js) -
+// together that's what "no record kept for guests" means in practice here.
+//
+// guestLimiter (not just the shared authLimiter mounted on this whole router) matters:
+// this endpoint has no credentials to get wrong, so it always "succeeds", and authLimiter
+// skips successful requests - without a limiter that counts successes too, a client could
+// trigger unlimited cost-12 bcrypt hashes and permanent row inserts.
+router.post("/guest", guestLimiter, async (req, res) => {
     const db = getDb()
+    deleteExpiredGuests(db)
 
     let username = ""
     for (let attempt = 0; attempt < 5 && !username; attempt++) {
