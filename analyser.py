@@ -625,7 +625,6 @@ def analyse(
     rewrites: dict[str, list[dict]] = {}
 
     primary = ("EXPERIENCE", "PROJECTS", "VOLUNTEER", "SUMMARY")
-    descriptive = ("SKILLS", "EDUCATION", "CERTIFICATIONS", "AWARDS", "PUBLICATIONS", "INTERESTS")
 
     jobs: list[tuple[str, int, dict]] = []
 
@@ -636,9 +635,11 @@ def analyse(
         for i, unit in enumerate(_build_units(sec, lines)):
             jobs.append((sec, i, unit))
 
-    for sec in descriptive:
-        lines = resume.sections.get(sec, [])
-        if not lines:
+    # every other detected section (SKILLS, EDUCATION, CERTIFICATIONS, LANGUAGES, etc.) - a
+    # fixed whitelist here used to fall out of sync with parser.py's section aliases, so any
+    # section not on that list (e.g. Languages, References) was silently never examined at all
+    for sec, lines in resume.sections.items():
+        if sec == "HEADER" or sec in primary or not lines:
             continue
         for i, unit in enumerate(_build_units(sec, lines)):
             text = unit["text"]

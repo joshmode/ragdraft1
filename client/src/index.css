@@ -357,6 +357,7 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     margin: 0 auto 1.25rem;
     width: min(100%, 1180px);
     display: flex;
+    flex-wrap: wrap;
     justify-content: center;
     align-items: center;
     box-shadow: 0 10px 24px rgba(10,10,15,0.18);
@@ -372,9 +373,8 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     padding: 0.55rem 0.85rem;
     border-radius: 10px;
     transition: all 0.18s ease;
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     text-align: center;
-    min-width: 110px;
     cursor: pointer;
     border: 1px solid transparent;
     color: #ffffff;
@@ -700,6 +700,7 @@ select.input-field {
 .topbar-inline { display: inline-flex; align-items: center; gap: 0.75rem; margin-left: auto; }
 .doc-subhead { font-family: 'Instrument Serif', serif; font-weight: 400; margin: 1.4rem 0 0.6rem; }
 .btn-block-gap { margin-top: 0.75rem; }
+.generate-btn { margin-top: 1rem; }
 .scrape-row { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
 .model-bar { flex-wrap: wrap; row-gap: 0.75rem; }
 section > .section-label { margin-top: 0.25rem; }
@@ -713,7 +714,7 @@ details.card > summary {
 .prelim-panels { margin-top: 0.9rem; display: grid; gap: 1rem; }
 .prelim-panels .card { margin-bottom: 0; }
 .evaluation-card .toggle-wrap { margin-bottom: 0.85rem; font-size: 0.84rem; }
-.evaluation-card textarea { margin-bottom: 0.35rem; }
+.evaluation-card textarea { margin-top: 0.65rem; margin-bottom: 0.35rem; }
 .key-card .two-col { align-items: center; }
 .local-endpoint-field { display: flex; flex-direction: column; gap: 0.35rem; min-width: 260px; flex: 1 1 260px; }
 .local-endpoint-field small { line-height: 1.4; }
@@ -728,7 +729,6 @@ details.card > summary {
     .rewrite-pane.before { border-right: 0; border-bottom: 1px solid #E8EAED; }
     .pdf-frame, .pdf-shell { min-height: 560px; }
     .two-col, .two-col-pdf, .three-col { grid-template-columns: 1fr; }
-    .nav-bar { flex-wrap: wrap; }
     .workspace { grid-template-columns: 1fr; }
     .sidebar { position: static; max-height: none; }
     .model-bar { align-items: stretch; flex-direction: column; }
