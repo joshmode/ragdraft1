@@ -18,6 +18,7 @@ function initDb(db) {
             display_name TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'candidate',
             email TEXT DEFAULT '',
+            is_guest INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS resumes (
@@ -185,6 +186,11 @@ function initDb(db) {
         db.exec("ALTER TABLE analyses ADD COLUMN content_hash TEXT DEFAULT ''")
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_analyses_content_hash ON analyses(content_hash)")
+
+    const userColumns = db.prepare("PRAGMA table_info(users)").all().map(col => col.name)
+    if (!userColumns.includes("is_guest")) {
+        db.exec("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
+    }
 }
 
 export function getDb() {

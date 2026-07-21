@@ -83,7 +83,7 @@ function waitForAnalysis(jobId) {
 }
 
 function AuthPage() {
-    const { login, register } = useAuth()
+    const { login, register, continueAsGuest } = useAuth()
     const [tab, setTab] = useState("login")
     const [form, setForm] = useState({ username: "", password: "", display_name: "", email: "", confirm: "", role: "candidate" })
     const [error, setError] = useState("")
@@ -104,6 +104,18 @@ function AuthPage() {
         try {
             if (tab === "login") await login(form.username, form.password)
             else await register(form.username, form.password, form.display_name, form.role, form.email)
+        } catch (err) {
+            setError(getError(err))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function guestContinue() {
+        setError("")
+        setBusy(true)
+        try {
+            await continueAsGuest()
         } catch (err) {
             setError(getError(err))
         } finally {
@@ -139,6 +151,10 @@ function AuthPage() {
                     {error && <p className="error-msg">{error}</p>}
                     <button className="btn-primary full-width auth-submit-btn" disabled={busy}>{busy ? "Please wait..." : tab === "login" ? "Sign In" : "Create Account"}</button>
                 </form>
+                <div className="auth-guest-row">
+                    <button type="button" className="auth-guest-link" disabled={busy} onClick={guestContinue}>Continue without an account</button>
+                    <p className="muted auth-guest-note">Guest sessions aren't saved — your resumes and analysis won't be kept once you leave.</p>
+                </div>
             </section>
         </main>
     )
@@ -236,8 +252,8 @@ function ResultsSidebar({ result, user, onLogout }) {
     const sections = result.sections || {}
     return <aside className="sidebar">
         <div className="sidebar-top">
-            <span className="sidebar-user">Signed in as <b>{user.display_name}</b></span>
-            <button className="btn-signout" onClick={onLogout}>Sign out</button>
+            <span className="sidebar-user">{user.is_guest ? "Browsing as " : "Signed in as "}<b>{user.display_name}</b></span>
+            <button className="btn-signout" onClick={onLogout}>{user.is_guest ? "Sign In" : "Sign out"}</button>
         </div>
         <ScoreCard scoreData={result.score} />
         <div className="sidebar-scroll">
@@ -942,7 +958,7 @@ function App() {
                 <input className="input-field" value={localEndpoint} onChange={e => setLocalEndpoint(e.target.value)} placeholder="Local API Endpoint" />
                 <small className="muted">Must be reachable by the server, not just your browser. Defaults to your machine's Ollama if you're running this app locally — for a hosted deployment, expose your local model with a tunnel (e.g. ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that URL here.</small>
             </div>}
-            {!result && <span className="topbar-inline"><span className="muted">Signed in as <b>{user.display_name}</b></span><button className="btn-secondary" onClick={logout}>Sign out</button></span>}
+            {!result && <span className="topbar-inline"><span className="muted">{user.is_guest ? "Browsing as " : "Signed in as "}<b>{user.display_name}</b></span><button className="btn-secondary" onClick={logout}>{user.is_guest ? "Sign In" : "Sign out"}</button></span>}
         </div>
         {providerMeta?.byok && <div className="card key-card">
             <span className="section-label">{providerMeta.label.replace(" (Own Key)", "")} API Key</span>

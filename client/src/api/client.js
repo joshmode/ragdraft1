@@ -1,4 +1,5 @@
 import axios from "axios"
+import { getToken, clearSession } from "./session"
 
 const api = axios.create({
     baseURL: "/api",
@@ -6,7 +7,7 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem("rtr_token")
+    const token = getToken()
     if (token) {
         config.headers.Authorization = `Bearer ${token}`
     }
@@ -27,8 +28,7 @@ api.interceptors.response.use(
         // only reload on a 401 that HAD a token - a bad login/register attempt has no
         // Authorization header and needs to reach the form's own error handling instead
         if (err.response?.status === 401 && err.config?.headers?.Authorization) {
-            localStorage.removeItem("rtr_token")
-            localStorage.removeItem("rtr_user")
+            clearSession()
             window.location.reload()
             return Promise.reject(err)
         }
