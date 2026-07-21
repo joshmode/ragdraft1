@@ -240,9 +240,11 @@ function ResultsSidebar({ result, user, onLogout }) {
             <button className="btn-signout" onClick={onLogout}>Sign out</button>
         </div>
         <ScoreCard scoreData={result.score} />
-        {result.contact && Object.keys(result.contact).length > 0 && <div className="card"><span className="section-label">Contact Detected</span><div className="contact-grid">{Object.entries(result.contact).map(([key, value]) => <span className="contact-chip" key={key}><b>{key}</b><span className="contact-value">{value}</span></span>)}</div></div>}
-        <div className="card"><span className="section-label">Parser Debug</span>{["EXPERIENCE", "EDUCATION", "SKILLS", "PROJECTS"].map(name => <p key={name} className={sections[name] ? "ok-text" : "error-text"}>{sections[name] ? "✓" : "✗"} {name[0] + name.slice(1).toLowerCase()}</p>)}</div>
-        {user.role === "candidate" && <SessionJoin />}
+        <div className="sidebar-scroll">
+            {result.contact && Object.keys(result.contact).length > 0 && <div className="card"><span className="section-label">Contact Detected</span><div className="contact-grid">{Object.entries(result.contact).map(([key, value]) => <span className="contact-chip" key={key}><b>{key}</b><span className="contact-value">{value}</span></span>)}</div></div>}
+            <div className="card"><span className="section-label">Parser Debug</span>{["EXPERIENCE", "EDUCATION", "SKILLS", "PROJECTS"].map(name => <p key={name} className={sections[name] ? "ok-text" : "error-text"}>{sections[name] ? "✓" : "✗"} {name[0] + name.slice(1).toLowerCase()}</p>)}</div>
+            {user.role === "candidate" && <SessionJoin />}
+        </div>
     </aside>
 }
 
@@ -456,7 +458,7 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
         }
     }
 
-    return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">✏️ Edit Your {title}</h3><textarea className="input-field document-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
+    return <section><span className="section-label">Generate {title}</span><p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p><button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>{error && <p className="error-msg">{error}</p>}{text && <><h3 className="doc-subhead">Edit Your {title}</h3><textarea className="input-field doc-editor" value={text} onChange={e => setText(e.target.value)} /><h3 className="doc-subhead">Preview</h3><article className="card markdown-preview"><ReactMarkdown>{text}</ReactMarkdown></article><div className="export-row"><button className="btn-dark" onClick={() => downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md")}>📄 Markdown</button><button className="btn-dark" onClick={() => downloadExport("docx")}>📝 DOCX</button><button className="btn-dark" onClick={() => downloadExport("pdf")}>📕 PDF</button></div></>}</section>
 }
 
 const SECTION_ORDER = [
@@ -825,6 +827,7 @@ function App() {
     const [error, setError] = useState("")
     const [history, setHistory] = useState([])
     const providerMeta = PROVIDER_OPTIONS.find(p => p.key === provider)
+    const visibleProviders = PROVIDER_OPTIONS.filter(p => p.key !== "local" || status.localAllowed)
     const needsKey = providerMeta?.byok && status[provider] === false
 
     function refreshStatus() {
@@ -919,7 +922,7 @@ function App() {
         <div className="model-bar">
             <label>AI Provider
                 <select className="input-field" value={provider} onChange={e => setProvider(e.target.value)}>
-                    {PROVIDER_OPTIONS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+                    {visibleProviders.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
                 </select>
             </label>
             <label className="toggle-wrap"><span className={`toggle-track ${useCritic ? "active" : ""}`} onClick={() => setUseCritic(!useCritic)}><span className="toggle-thumb" /></span>Agentic Self-Correction</label>
@@ -949,10 +952,11 @@ function App() {
         {needsKey && <p className="warning-strip">Add a {providerMeta.label.replace(" (Own Key)", "")} API key above, or switch to Default (Free), before analysing.</p>}
         {error && <p className="warning-strip">{error}</p>}
         {!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
-        {result && <div className="workspace">
+        {result && <>
+            <nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>
+            <div className="workspace">
             <ResultsSidebar result={result} user={user} onLogout={logout} />
             <div className="workspace-main">
-                <nav className="nav-bar">{navItems.map(item => <button className={`nav-pill ${view === item ? "active" : ""}`} key={item} onClick={() => setView(item)}>{item}</button>)}</nav>
                 <div className="fade-in" key={view}>
                     {view === "Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}
                     {view === "Keyword Gap" && <KeywordGap result={result} />}
@@ -964,7 +968,8 @@ function App() {
                     {view === "Job Matching" && <JobMatching result={result} provider={provider} localEndpoint={localEndpoint} />}
                 </div>
             </div>
-        </div>}
+            </div>
+        </>}
     </main>
 }
 

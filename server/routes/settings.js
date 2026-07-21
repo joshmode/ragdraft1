@@ -8,15 +8,16 @@ const router = Router()
 // Reports what's usable for THIS signed-in user: their own saved BYOK keys
 // (per-user, from the database) plus the shared/global state that's the
 // same for everyone (whether the pooled free tier is configured, whether
-// LinkedIn OAuth is set up). Local LLM never needs a key, so it's always
-// reported available — whether it actually works depends on the endpoint
-// the user points it at.
+// LinkedIn OAuth is set up, whether this deployment allows the local LLM
+// provider at all). The API already 403s a /run against "local" when it's
+// disabled - this just lets the UI hide the option instead of offering a
+// choice that would fail.
 router.get("/env-status", authenticateToken, async (req, res) => {
     const status = {}
     for (const provider of BYOK_PROVIDERS) {
         status[provider] = hasUserApiKey(req.user.id, provider)
     }
-    status.local = true
+    status.localAllowed = process.env.ALLOW_LOCAL_PROVIDER === "true"
 
     const engineUrl = req.app.locals.engineUrl
     try {
