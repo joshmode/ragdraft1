@@ -598,21 +598,37 @@ select.input-field {
 .history-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid #E8EAED; }
 .history-list > div:last-child { border-bottom: 0; }
 .history-list small { color: #6B7280; }
-.heatmap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-.heatmap-cell {
-    border-radius: 12px;
-    padding: 1rem;
+.heatmap-table-wrap { overflow-x: auto; margin-bottom: 1rem; border: 1px solid #E8EAED; border-radius: 12px; }
+.heatmap-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+.heatmap-table th, .heatmap-table td { padding: 0.35rem 0.5rem; text-align: center; white-space: nowrap; }
+.heatmap-table thead th {
+    color: #6B7280;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     text-align: center;
-    color: #FFFFFF;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.25);
-    transition: transform 0.15s ease;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
+    border-bottom: 1px solid #E8EAED;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+    position: sticky;
+    top: 0;
+    background: #FFFFFF;
 }
-.heatmap-cell:hover { transform: scale(1.03); }
-.heatmap-cell-name { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-.heatmap-cell-value { font-family: 'Instrument Serif', serif; font-size: 1.6rem; }
+.heatmap-table thead th:first-child { text-align: left; }
+.heatmap-row-label { text-align: left !important; }
+.heatmap-row-label small { display: block; color: #6B7280; font-size: 0.68rem; }
+.heatmap-table tbody tr:nth-child(even) { background: #FAFAFA; }
+.heatmap-table-cell {
+    display: inline-block;
+    min-width: 44px;
+    padding: 0.25rem 0.4rem;
+    border-radius: 6px;
+    color: #FFFFFF;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
+.heatmap-table-cell.empty { background: #F0F1F3 !important; color: #C1C5CB; font-weight: 400; text-shadow: none; }
 .mentor-table { overflow-x: auto; }
 .mentor-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .mentor-table th, .mentor-table td { padding: 0.65rem; border-bottom: 1px solid #E8EAED; text-align: left; }
