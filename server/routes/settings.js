@@ -22,7 +22,7 @@ router.get("/env-status", authenticateToken, async (req, res) => {
     try {
         const engineRes = await fetch(`${engineUrl}/env-status`)
         const engineStatus = await engineRes.json()
-        status.default = !!engineStatus.groq
+        status.default = !!engineStatus.openrouter
         status.linkedin = !!engineStatus.linkedin
     } catch {
         status.default = false
