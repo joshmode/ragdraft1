@@ -242,7 +242,7 @@ function ResultsSidebar({ result, user, onLogout }) {
         <ScoreCard scoreData={result.score} />
         <div className="sidebar-scroll">
             {result.contact && Object.keys(result.contact).length > 0 && <div className="card"><span className="section-label">Contact Detected</span><div className="contact-grid">{Object.entries(result.contact).map(([key, value]) => <span className="contact-chip" key={key}><b>{key}</b><span className="contact-value">{value}</span></span>)}</div></div>}
-            <div className="card"><span className="section-label">Parser Debug</span>{["EXPERIENCE", "EDUCATION", "SKILLS", "PROJECTS"].map(name => <p key={name} className={sections[name] ? "ok-text" : "error-text"}>{sections[name] ? "✓" : "✗"} {name[0] + name.slice(1).toLowerCase()}</p>)}</div>
+            <div className="card"><span className="section-label">Parser Status</span>{["EXPERIENCE", "EDUCATION", "SKILLS", "PROJECTS"].map(name => <p key={name} className={sections[name] ? "ok-text" : "error-text"}>{sections[name] ? "✓" : "✗"} {name[0] + name.slice(1).toLowerCase()}</p>)}</div>
             {user.role === "candidate" && <SessionJoin />}
         </div>
     </aside>
@@ -393,7 +393,10 @@ function AnnotationThread({ annotations, comment, setComment, postComment }) {
 
 function KeywordGap({ result }) {
     const keywords = result.jd_keywords || []
-    if (!keywords.length) return <p className="muted">Paste a job description above and re-analyse to see keyword gaps.</p>
+    if (!keywords.length) {
+        if (result.keyword_extraction_failed) return <p className="warning-strip">Keyword extraction from the job description failed (the model may be rate-limited or temporarily unavailable). Re-run the analysis to try again.</p>
+        return <p className="muted">Paste a job description above and re-analyse to see keyword gaps.</p>
+    }
     const missing = result.missing_keywords || []
     const present = keywords.filter(item => !missing.includes(item))
     const coverage = Math.round(present.length / keywords.length * 100)
