@@ -74,7 +74,7 @@ class ProviderResolutionError extends Error {
 // turns a UI provider choice into what the engine needs, incl the user's own byok key
 export function resolveProviderForRequest(userId, providerChoice) {
     if (providerChoice === "default") {
-        return { engineProvider: "groq", apiKey: "" } // pooled key, lives on the engine's own env
+        return { engineProvider: "openrouter", apiKey: "" } // pooled key, lives on the engine's own env
     }
     if (providerChoice === "local") {
         return { engineProvider: "local", apiKey: "" }

@@ -232,13 +232,17 @@ def compare_endpoint():
 
 @app.route("/env-status", methods=["GET"])
 def env_status():
-    # per-user byok keys live encrypted in the express db now, this is just the pooled secrets
+    # per-user byok keys live encrypted in the express db now, this is just the pooled secrets.
+    # groq is kept reported here even though "default" no longer resolves to it - the provider
+    # itself still works, just isn't wired up as the pooled tier anymore
     _load_env()
     groq_key = os.environ.get("GROQ_API_KEY", "")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
     li_id = os.environ.get("LINKEDIN_CLIENT_ID", "")
     li_secret = os.environ.get("LINKEDIN_CLIENT_SECRET", "")
     return jsonify({
         "groq": bool(groq_key) and not _is_key_placeholder(groq_key),
+        "openrouter": bool(openrouter_key) and not _is_key_placeholder(openrouter_key),
         "linkedin": bool(li_id) and not _is_key_placeholder(li_id) and bool(li_secret) and not _is_key_placeholder(li_secret),
     })
 

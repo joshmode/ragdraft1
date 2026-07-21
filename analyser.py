@@ -108,7 +108,7 @@ def _has_new_claims(original: str, rewritten: str) -> bool:
 def _critic_creds(provider: str, model: str, api_key: str, local_endpoint: str) -> tuple[str, str, str, str]:
     # CRITIC_SAME_AS_MAIN=false pins the critic to CRITIC_PROVIDER/CRITIC_API_KEY instead
     if os.environ.get("CRITIC_SAME_AS_MAIN", "true").lower() == "false":
-        provider = os.environ.get("CRITIC_PROVIDER", "groq")
+        provider = os.environ.get("CRITIC_PROVIDER", "openrouter")
         api_key = os.environ.get("CRITIC_API_KEY", "")
         local_endpoint = os.environ.get("CRITIC_LOCAL_ENDPOINT", "")
         model = os.environ.get("CRITIC_MODEL", "")

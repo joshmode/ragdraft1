@@ -4,7 +4,7 @@ RAGsToRiches now runs as a React single-page application served by an Express RE
 
 ## Run with Docker
 
-Copy `.env.example` to `.env`, set a long `JWT_SECRET` and `KEY_ENCRYPTION_SECRET` (`openssl rand -hex 32` for each), and add a `GROQ_API_KEY` so the free tier works out of the box (see "Providers & API keys" below). Then start the full application:
+Copy `.env.example` to `.env`, set a long `JWT_SECRET` and `KEY_ENCRYPTION_SECRET` (`openssl rand -hex 32` for each), and add an `OPENROUTER_API_KEY` so the free tier works out of the box (see "Providers & API keys" below). Then start the full application:
 
 ```bash
 docker compose up --build
@@ -24,23 +24,25 @@ The provider dropdown has five options:
 
 | Option | Who pays | Key source |
 |---|---|---|
-| **Default (Free)** | You (the operator), via a free tier | `GROQ_API_KEY` in `.env`, shared by every visitor |
+| **Default (Free)** | You (the operator), via a free tier | `OPENROUTER_API_KEY` in `.env`, shared by every visitor |
 | **Gemini / Claude / ChatGPT (Own Key)** | Each user, individually | That user's own key, saved to their account |
 | **Local LLM** | Nobody (self-hosted model) | An endpoint the user provides |
 
-**"Default (Free)" uses [Groq](https://console.groq.com/keys)**, not one of the big three — Groq has a genuinely free, generous rate-limited tier, which is what makes a public deployment usable by people with no API key of their own. Get a free key and set `GROQ_API_KEY` in `.env`; that one key is shared by every visitor who picks "Default." There's no meaningful free ongoing tier for Claude or OpenAI (only small trial credits), and Gemini's free tier is more restrictive than Groq's, which is why Groq is the pooled default rather than Gemini.
+**"Default (Free)" uses [OpenRouter](https://openrouter.ai/keys)**, not one of the big three — OpenRouter fronts a rotating set of genuinely free models, which is what makes a public deployment usable by people with no API key of their own. Get a free key and set `OPENROUTER_API_KEY` in `.env`; that one key is shared by every visitor who picks "Default." There's no meaningful free ongoing tier for Claude, OpenAI, or Gemini (only small trial credits or tighter rate limits), which is why OpenRouter's free-tier models are the pooled default.
+
+Groq was the pooled default in an earlier version and its provider code is still fully intact and working (`router.py`'s `"groq"` branch, `GROQ_API_KEY`/`GROQ_DEFAULT_MODEL` in `.env.example`) — it just isn't what "Default" resolves to anymore, since OpenRouter's free tier turned out more reliable. Point `resolveProviderForRequest()` in `server/userKeys.js` back at `"groq"` if you ever want to switch back.
 
 **Per-user "Own Key" storage is real bring-your-own-key, not shared state.** Each user's key is encrypted (AES-256-GCM, keyed by `KEY_ENCRYPTION_SECRET`) and stored against their account in SQLite. It's decrypted server-side only at the moment of an LLM call, for that one user's request, and is never written to a shared file, env var, or returned to any client. Two users can each save a different Gemini key and their requests never cross — this replaced an earlier design that wrote every saved key into one shared file, which meant whoever saved a key last silently became the key everyone's requests used.
 
-There's no model dropdown anymore — each provider always uses its current flagship "latest" model, configured server-side (`GEMINI_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`, `OPENAI_DEFAULT_MODEL`, `GROQ_DEFAULT_MODEL` in `.env`). The pooled Groq tier defaults to `qwen/qwen3.6-27b`. Double-check these against each provider's current docs before deploying — model IDs are a moving target and the shipped defaults may drift out of date.
+There's no model dropdown anymore — each provider always uses its current flagship "latest" model, configured server-side (`GEMINI_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`, `OPENAI_DEFAULT_MODEL`, `OPENROUTER_DEFAULT_MODEL` in `.env`). The pooled OpenRouter tier defaults to `qwen/qwen3.6-plus:free`. Double-check these against each provider's current docs before deploying — model IDs are a moving target and the shipped defaults may drift out of date.
 
 **Local LLM** only works if the *server* can reach the endpoint — not the visitor's own laptop. A website can't reach into a stranger's home network by default. Running the app locally, `localhost:11434` (Ollama's default port) resolves correctly since browser and server are the same machine. On a hosted deployment, a user who wants to use their own local model needs to expose it with a tunnel (ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that public URL into the endpoint field — the UI explains this inline.
 
 ### The critic (agentic self-correction) has its own, separate provider
 
-Turning on "Agentic Self-Correction" runs a second LLM pass that checks each rewrite for invented numbers. By default that critic call uses whatever provider/key the main request used (`CRITIC_SAME_AS_MAIN=true`). Set it to `false` and the critic always uses `CRITIC_PROVIDER` + `CRITIC_API_KEY` instead, regardless of what the user picked for the main analysis — so you can run every critic check on one fixed, cheap/fast provider (Groq) even when a BYOK user's main request goes to Claude or ChatGPT. Leave `CRITIC_API_KEY` unset to just reuse that provider's normal pooled key (e.g. the same `GROQ_API_KEY`). `docker-compose.prod.yml` pins this to Groq by default; local/dev use is `true` (same-as-main) unless you change it in `.env`.
+Turning on "Agentic Self-Correction" runs a second LLM pass that checks each rewrite for invented numbers. By default that critic call uses whatever provider/key the main request used (`CRITIC_SAME_AS_MAIN=true`). Set it to `false` and the critic always uses `CRITIC_PROVIDER` + `CRITIC_API_KEY` instead, regardless of what the user picked for the main analysis — so you can run every critic check on one fixed, cheap/fast provider (OpenRouter) even when a BYOK user's main request goes to Claude or ChatGPT. Leave `CRITIC_API_KEY` unset to just reuse that provider's normal pooled key (e.g. the same `OPENROUTER_API_KEY`). `docker-compose.prod.yml` pins this to OpenRouter by default; local/dev use is `true` (same-as-main) unless you change it in `.env`.
 
-`CRITIC_MODEL` is independent of that same-as-main toggle — it always overrides just the *model*, never the provider/key, so the critic can run a different (typically cheaper/faster) model from the main agent even while sharing its credentials. The shipped default is `openai/gpt-oss-120b` against the main agent's `qwen/qwen3.6-27b`, both served by Groq.
+`CRITIC_MODEL` is independent of that same-as-main toggle — it always overrides just the *model*, never the provider/key, so the critic can run a different (typically cheaper/faster) model from the main agent even while sharing its credentials. The shipped default is `nvidia/nemotron-3-ultra-550b-a55b:free` against the main agent's `qwen/qwen3.6-plus:free`, both free-tier models served through OpenRouter.
 
 ## Services
 
@@ -165,7 +167,7 @@ runs on Render/Railway/Fly.io if you prefer a managed platform).
    ```bash
    cp .env.example .env
    # set a long random JWT_SECRET and KEY_ENCRYPTION_SECRET (openssl rand -hex 32),
-   # and GROQ_API_KEY so the free tier works for visitors with no key of their own
+   # and OPENROUTER_API_KEY so the free tier works for visitors with no key of their own
    ```
    Set `FRONTEND_URL` in `.env` (or the compose file's `api` environment) to
    your real domain, e.g. `FRONTEND_URL=https://resumes.example.com`. It

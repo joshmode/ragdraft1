@@ -14,13 +14,16 @@ _PLACEHOLDER_VALS = {
     "insert_key_here", "placeholder",
 }
 
-# "default" resolves to groq server-side before it ever reaches here
+# "default" resolves to openrouter server-side before it ever reaches here.
+# groq is kept below (fully working, just unused by default) rather than removed -
+# switch "default" back to it in userKeys.js if openrouter ever falls out of favor too.
 _PROVIDER_LIMITS = {
-    "gemini": int(os.environ.get("GEMINI_MAX_CONCURRENCY", "4")),
-    "claude": int(os.environ.get("CLAUDE_MAX_CONCURRENCY", "3")),
-    "chatgpt": int(os.environ.get("OPENAI_MAX_CONCURRENCY", "4")),
-    "groq": int(os.environ.get("GROQ_MAX_CONCURRENCY", "6")),
-    "local": int(os.environ.get("LOCAL_MAX_CONCURRENCY", "2")),
+    "gemini":     int(os.environ.get("GEMINI_MAX_CONCURRENCY", "4")),
+    "claude":     int(os.environ.get("CLAUDE_MAX_CONCURRENCY", "3")),
+    "chatgpt":    int(os.environ.get("OPENAI_MAX_CONCURRENCY", "4")),
+    "openrouter": int(os.environ.get("OPENROUTER_MAX_CONCURRENCY", "6")),
+    "groq":       int(os.environ.get("GROQ_MAX_CONCURRENCY", "6")),
+    "local":      int(os.environ.get("LOCAL_MAX_CONCURRENCY", "2")),
 }
 _PROVIDER_LOCKS = {
     provider: threading.BoundedSemaphore(max(limit, 1))
@@ -29,11 +32,12 @@ _PROVIDER_LOCKS = {
 
 # env-overridable since exact model IDs drift, check these against current provider docs
 _DEFAULT_MODELS = {
-    "gemini":  os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
-    "claude":  os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
-    "chatgpt": os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-4o"),
-    "groq":    os.environ.get("GROQ_DEFAULT_MODEL", "qwen/qwen3.6-27b"),
-    "local":   os.environ.get("LOCAL_DEFAULT_MODEL", "llama3"),
+    "gemini":     os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
+    "claude":     os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
+    "chatgpt":    os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-4o"),
+    "openrouter": os.environ.get("OPENROUTER_DEFAULT_MODEL", "qwen/qwen3.6-plus:free"),
+    "groq":       os.environ.get("GROQ_DEFAULT_MODEL", "qwen/qwen3.6-27b"),
+    "local":      os.environ.get("LOCAL_DEFAULT_MODEL", "llama3"),
 }
 
 
@@ -168,7 +172,25 @@ def llm_call(
                     if res.choices[0].message.content is None: raise ValueError("ChatGPT returned None.")
                     return res.choices[0].message.content
 
+                elif provider == "openrouter":
+                    # openrouter's api is openai-compatible, reuse the sdk with a different base_url
+                    import openai
+                    key = _resolve_key("OpenRouter", "OPENROUTER_API_KEY", api_key)
+                    mdl = model or _DEFAULT_MODELS["openrouter"]
+                    client = openai.OpenAI(api_key=key, base_url="https://openrouter.ai/api/v1", timeout=timeout)
+                    res = client.chat.completions.create(
+                        model=mdl,
+                        max_tokens=max_tokens,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ]
+                    )
+                    if res.choices[0].message.content is None: raise ValueError("OpenRouter returned None.")
+                    return res.choices[0].message.content
+
                 elif provider == "groq":
+                    # kept working but unused by default (see _PROVIDER_LIMITS comment above) -
                     # groq's api is openai-compatible, reuse the sdk with a different base_url
                     import openai
                     key = _resolve_key("Groq", "GROQ_API_KEY", api_key)
