@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&display=swap');
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7F8FA; min-height: 100vh; }
@@ -63,12 +64,12 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
 }
 
 .section-label {
-    font-family: 'Instrument Serif', serif;
-    font-weight: 400;
-    font-size: 0.95rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 0.74rem;
     font-style: normal;
     text-transform: uppercase;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.06em;
     color: #6B7280;
     margin-bottom: 0.5rem;
     display: block;
@@ -126,11 +127,11 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     letter-spacing: -0.03em;
 }
 .score-label-text {
-    font-family: 'Instrument Serif', serif;
-    font-weight: 400;
-    font-size: 0.85rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 0.8rem;
     font-style: normal;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
 }
 .score-sub, .muted { font-size: 0.8rem; color: #6B7280; }
 
@@ -383,9 +384,9 @@ html, body { font-family: 'DM Sans', sans-serif; color: #0D0F11; background: #F7
     cursor: pointer;
     border: 1px solid transparent;
     color: #ffffff;
-    font-family: 'Instrument Serif', serif;
-    font-weight: 400;
-    font-size: 0.88rem;
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 0.82rem;
     letter-spacing: 0.01em;
     white-space: nowrap;
 }
@@ -513,8 +514,9 @@ select.input-field {
     box-shadow: 0 4px 20px rgba(13,15,17,0.08);
 }
 .auth-card h2 {
-    font-family: 'Instrument Serif', serif;
-    font-weight: 400;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 1.3rem;
     text-align: center;
     margin-bottom: 0.25rem;
 }
@@ -598,10 +600,11 @@ select.input-field {
 .history-list > div { display: grid; grid-template-columns: 1fr auto auto; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid #E8EAED; }
 .history-list > div:last-child { border-bottom: 0; }
 .history-list small { color: #6B7280; }
-.heatmap-table-wrap { overflow-x: auto; margin-bottom: 1rem; border: 1px solid #E8EAED; border-radius: 12px; }
-.heatmap-table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
-.heatmap-table th, .heatmap-table td { padding: 0.35rem 0.5rem; text-align: center; white-space: nowrap; }
+.heatmap-table-wrap { overflow: auto; max-height: 420px; margin-bottom: 1rem; border: 1px solid #E8EAED; border-radius: 12px; }
+.heatmap-table { border-collapse: collapse; font-size: 0.76rem; }
+.heatmap-table th, .heatmap-table td { padding: 0.3rem 0.4rem; text-align: center; white-space: nowrap; }
 .heatmap-table thead th {
+    font-family: 'Inter', sans-serif;
     color: #6B7280;
     font-size: 0.68rem;
     font-weight: 700;
@@ -614,21 +617,34 @@ select.input-field {
     position: sticky;
     top: 0;
     background: #FFFFFF;
+    z-index: 1;
 }
-.heatmap-table thead th:first-child { text-align: left; }
-.heatmap-row-label { text-align: left !important; }
-.heatmap-row-label small { display: block; color: #6B7280; font-size: 0.68rem; }
-.heatmap-table tbody tr:nth-child(even) { background: #FAFAFA; }
-.heatmap-table-cell {
-    display: inline-block;
-    min-width: 44px;
-    padding: 0.25rem 0.4rem;
-    border-radius: 6px;
+.heatmap-table thead th:first-child { text-align: left; position: sticky; left: 0; z-index: 2; }
+.heatmap-row-label {
+    text-align: left !important;
+    font-family: 'Inter', sans-serif;
+    position: sticky;
+    left: 0;
+    background: #FFFFFF;
+}
+.heatmap-row-label b { font-size: 0.78rem; }
+.heatmap-row-label small { display: block; color: #6B7280; font-size: 0.66rem; }
+.heatmap-square {
+    width: 46px;
+    height: 46px;
+    margin: 0 auto;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     color: #FFFFFF;
-    font-weight: 600;
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.02rem;
     text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: transform 0.15s ease;
 }
-.heatmap-table-cell.empty { background: #F0F1F3 !important; color: #C1C5CB; font-weight: 400; text-shadow: none; }
+.heatmap-square:hover { transform: scale(1.08); }
+.heatmap-square.empty { background: #F0F1F3 !important; color: #C1C5CB; text-shadow: none; font-size: 0.85rem; }
 .mentor-table { overflow-x: auto; }
 .mentor-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .mentor-table th, .mentor-table td { padding: 0.65rem; border-bottom: 1px solid #E8EAED; text-align: left; }
@@ -709,7 +725,7 @@ select.input-field {
 
 /* ---- mentor workspace & feedback ---- */
 .detail-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.1rem; }
-.detail-title { font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 1.5rem; }
+.detail-title { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 1.35rem; }
 .btn-small { padding: 0.32rem 0.7rem; font-size: 0.75rem; }
 .session-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
 .session-code { font-family: ui-monospace, Menlo, monospace; font-size: 1rem; color: #7c3aed; letter-spacing: 0.06em; }
@@ -734,7 +750,7 @@ select.input-field {
 /* ---- layout & spacing polish ---- */
 .topbar { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; margin-bottom: 1.25rem; }
 .topbar-inline { display: inline-flex; align-items: center; gap: 0.75rem; margin-left: auto; }
-.doc-subhead { font-family: 'Instrument Serif', serif; font-weight: 400; margin: 1.4rem 0 0.6rem; }
+.doc-subhead { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 1.05rem; margin: 1.4rem 0 0.6rem; }
 .btn-block-gap { margin-top: 0.75rem; }
 .generate-btn { margin-top: 1rem; }
 .scrape-row { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
