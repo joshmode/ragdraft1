@@ -285,12 +285,14 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
     }, [analysisId, current?.key])
 
     useEffect(() => {
-        let nextUrl = ""
+        let cancelled = false
+        let createdUrl = ""
         if (!file || file.type !== "application/pdf" || !current) {
             setPdfUrl("")
             return undefined
         }
         async function render() {
+            let url = ""
             try {
                 const items = actionable.map(({ key, item }) => ({
                     id: key,
@@ -301,16 +303,23 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
                 }))
                 const res = await api.post("/analysis/highlight", { file: await fileToBase64(file), items, active_key: current.key }, { responseType: "blob" })
                 const activePage = res.headers["x-active-page"]
-                nextUrl = URL.createObjectURL(res.data) + (activePage ? `#page=${activePage}` : "")
-                setPdfUrl(nextUrl)
+                url = URL.createObjectURL(res.data) + (activePage ? `#page=${activePage}` : "")
             } catch {
-                nextUrl = URL.createObjectURL(file)
-                setPdfUrl(nextUrl)
+                url = URL.createObjectURL(file)
             }
+            // a newer suggestion may have been selected while this request was in flight -
+            // drop the now-stale result instead of clobbering the fresher preview with it
+            if (cancelled) {
+                URL.revokeObjectURL(url.split("#")[0])
+                return
+            }
+            createdUrl = url
+            setPdfUrl(url)
         }
         render()
         return () => {
-            if (nextUrl) URL.revokeObjectURL(nextUrl.split("#")[0])
+            cancelled = true
+            if (createdUrl) URL.revokeObjectURL(createdUrl.split("#")[0])
         }
     }, [file, current?.key, actionable])
 

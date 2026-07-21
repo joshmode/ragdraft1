@@ -413,7 +413,10 @@ def _lines_to_resume(all_lines: list[str], result: ParsedResume | None = None) -
             current = canonical
             if current not in sections:
                 sections[current] = []
-        elif not canonical:
+        else:
+            # canonical == current (e.g. a "Technical Skills:" sub-line inside a SKILLS
+            # section, since that alias also maps to SKILLS) is a content line for the
+            # section we're already in, not a new section - keep it, don't drop it.
             sections[current].append(line)
 
     contact_vals = set(result.contact.values())
