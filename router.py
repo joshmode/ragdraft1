@@ -35,7 +35,7 @@ _DEFAULT_MODELS = {
     "gemini":     os.environ.get("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash"),
     "claude":     os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-4-5-sonnet-latest"),
     "chatgpt":    os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-4o"),
-    "openrouter": os.environ.get("OPENROUTER_DEFAULT_MODEL", "qwen/qwen3.6-plus:free"),
+    "openrouter": os.environ.get("OPENROUTER_DEFAULT_MODEL", "openai/gpt-oss-20b:free"),
     "groq":       os.environ.get("GROQ_DEFAULT_MODEL", "qwen/qwen3.6-27b"),
     "local":      os.environ.get("LOCAL_DEFAULT_MODEL", "llama3"),
 }
