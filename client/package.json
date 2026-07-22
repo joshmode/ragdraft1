@@ -9,15 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router-dom": "^7.1.0",
     "axios": "^1.7.9",
+    "chart.js": "^4.4.7",
+    "lucide-react": "^1.25.0",
+    "pdfjs-dist": "^4.9.155",
+    "react": "^19.0.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^19.0.0",
     "react-dropzone": "^14.3.5",
     "react-markdown": "^9.0.3",
-    "chart.js": "^4.4.7",
-    "react-chartjs-2": "^5.2.0",
-    "pdfjs-dist": "^4.9.155"
+    "react-router-dom": "^7.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

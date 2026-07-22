@@ -334,7 +334,8 @@ def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpo
     sys_prompt = (
         "You are a resume-to-job-description matching expert. "
         "Compare the candidate's resume against the job description. "
-        "Return ONLY valid JSON with this structure:\n"
+        "Return ONLY valid JSON with this structure, no explanation, no reasoning, no "
+        "preamble, nothing before or after the JSON:\n"
         '{"match_pct": 72, "missing_skills": ["skill1", "skill2"], '
         '"strong_matches": ["skill1", "skill2"], '
         '"tailoring_tips": ["tip1", "tip2"], '
@@ -349,9 +350,12 @@ def compare_resume_jd(resume_text: str, jd_text: str, provider: str, local_endpo
 
     try:
         from analyser import _parse_json
+        # generous budget: some free-tier models spend a large chunk of their output on an
+        # internal reasoning trace before the actual JSON, and a tight cap was truncating
+        # the response before it ever appeared
         raw = llm_call(user_prompt=usr_prompt, system_prompt=sys_prompt,
                        provider=provider, local_endpoint=local_endpoint,
-                       model=model, max_tokens=1024, api_key=api_key)
+                       model=model, max_tokens=4096, api_key=api_key)
         return _parse_json(raw)
     except Exception as e:
         return {"match_pct": 0, "missing_skills": [], "strong_matches": [],

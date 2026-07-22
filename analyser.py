@@ -40,9 +40,15 @@ def kw_freqs(jd_keywords: list[str], resume_text: str) -> dict[str, int]:
     return freqs
 
 
+_THINK_BLOCK_RE = re.compile(r'<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>', re.IGNORECASE | re.DOTALL)
+
+
 def _parse_json(raw: str) -> Any:
-    """extract json from llm output, stripping markdown fences and filler."""
-    cleaned = raw.strip()
+    """extract json from llm output, stripping reasoning traces, markdown fences and filler."""
+    # reasoning-tuned models (several free-tier ones included) sometimes emit a <think>...</think>
+    # block before the actual answer even when told not to - strip it so it can't get mistaken
+    # for the response itself or eat into the parse below
+    cleaned = _THINK_BLOCK_RE.sub('', raw).strip()
 
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
@@ -79,13 +85,17 @@ def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str
     prompt = (
         "Extract every technical skill, tool, framework, methodology, certification, "
         "and domain-specific keyword from this job description. "
-        "Return ONLY a JSON array of short strings — no explanation, no markdown fences. "
+        "Return ONLY a JSON array of short strings — no explanation, no reasoning, no "
+        "preamble, no markdown fences, nothing before or after the array. "
         'Example output: ["Python", "Docker", "CI/CD", "REST API", "agile"]\n\n'
         f"Job description:\n{job_desc}"
     )
 
+    # generous budget: some free-tier models spend a large chunk of their output on an
+    # internal reasoning trace before ever emitting the actual array, and a tight cap here
+    # was truncating the response before the JSON ever appeared
     raw = llm_call(user_prompt=prompt, provider=provider, local_endpoint=local_endpoint,
-                   model=model, max_tokens=1024, api_key=api_key)
+                   model=model, max_tokens=4096, api_key=api_key)
     return _parse_json(raw)
 
 
