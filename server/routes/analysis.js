@@ -5,7 +5,7 @@ import fetch from "node-fetch"
 import { getDb } from "../db.js"
 import { authenticateToken } from "../middleware/auth.js"
 import { canAccessAnalysis, getOwnedAnalysis, getOwnedResume } from "../access.js"
-import { pollLimiter } from "../middleware/rateLimit.js"
+import { pollLimiter, llmLimiter } from "../middleware/rateLimit.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
 import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
 
@@ -46,9 +46,10 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ file: fileB64, filename: req.file.originalname }),
         })
-        if (!parseRes.ok) {
-            throw new Error((await parseRes.json()).error || "The file could not be parsed.")
-        }
+        // forward the engine's own curated error response directly (same pattern as every
+        // other engine-backed route below) instead of re-wrapping it in a generic Error,
+        // so a genuinely unexpected failure (network/DB) below isn't confused with one
+        if (!parseRes.ok) return res.status(parseRes.status).json(await parseRes.json())
         const parsed = await parseRes.json()
 
         const db = getDb()
@@ -63,7 +64,7 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
             filename: req.file.originalname,
         })
     } catch (err) {
-        res.status(500).json({ error: `Parse failed: ${err.message}` })
+        res.status(500).json({ error: "The file could not be parsed. Please try a different file." })
     }
 })
 
@@ -124,7 +125,7 @@ async function processAnalysis(engineUrl, jobId, payload) {
     }
 }
 
-router.post("/run", authenticateToken, (req, res) => {
+router.post("/run", authenticateToken, llmLimiter, (req, res) => {
     const { resume_json, job_description, provider, use_critic, local_endpoint, resume_id } = req.body
     const resumeId = parseInt(resume_id)
     if (!resumeId || !getOwnedResume(resumeId, req.user.id)) {
@@ -168,7 +169,7 @@ router.post("/run", authenticateToken, (req, res) => {
     res.status(202).json({ job_id: row.lastInsertRowid, status: "queued" })
 })
 
-router.get("/jobs/:jobId", pollLimiter, authenticateToken, (req, res) => {
+router.get("/jobs/:jobId", authenticateToken, pollLimiter, (req, res) => {
     const db = getDb()
     const job = db.prepare("SELECT * FROM analysis_jobs WHERE id = ? AND user_id = ?").get(req.params.jobId, req.user.id)
     if (!job) return res.status(404).json({ error: "Analysis job not found." })
@@ -181,7 +182,7 @@ router.get("/jobs/:jobId", pollLimiter, authenticateToken, (req, res) => {
     res.json({ id: job.id, status: job.status, error: job.error || "" })
 })
 
-router.post("/highlight", pollLimiter, authenticateToken, async (req, res) => {
+router.post("/highlight", authenticateToken, pollLimiter, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
     try {
         const engineRes = await fetch(`${engineUrl}/highlight-pdf`, {
@@ -195,7 +196,7 @@ router.post("/highlight", pollLimiter, authenticateToken, async (req, res) => {
         res.setHeader("X-Active-Page", engineRes.headers.get("x-active-page") || "")
         res.send(data)
     } catch (err) {
-        res.status(500).json({ error: `PDF highlighting failed: ${err.message}` })
+        res.status(500).json({ error: "PDF highlighting failed. Please try again." })
     }
 })
 
@@ -215,11 +216,18 @@ router.get("/history", authenticateToken, (req, res) => {
     })))
 })
 
-router.get("/analytics/overview", authenticateToken, (req, res) => {
+router.get("/insights/overview", authenticateToken, (req, res) => {
     const db = getDb()
-    const rows = db.prepare(
-        "SELECT id, resume_id, results_json, score_total, provider, model, created_at FROM analyses WHERE user_id = ? ORDER BY created_at ASC LIMIT 50"
-    ).all(req.user.id)
+    // the outer ORDER BY re-sorts back to ascending (oldest of the most-recent-50 first) -
+    // the Insights view indexes this array assuming the LAST entry is the latest attempt
+    // (see its "most improved section" comparison), so a plain "ORDER BY created_at ASC
+    // LIMIT 50" would instead freeze on a user's *oldest* 50 attempts forever past that point
+    const rows = db.prepare(`
+        SELECT * FROM (
+            SELECT id, resume_id, results_json, score_total, provider, model, created_at
+            FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
+        ) ORDER BY created_at ASC
+    `).all(req.user.id)
     const analyses = rows.map(row => {
         let results = {}
         try { results = JSON.parse(row.results_json) } catch {}
@@ -236,7 +244,7 @@ router.get("/analytics/overview", authenticateToken, (req, res) => {
     res.json({ analyses })
 })
 
-router.get("/analytics/delta", authenticateToken, (req, res) => {
+router.get("/insights/delta", authenticateToken, (req, res) => {
     const from = getOwnedAnalysis(req.query.from, req.user.id)
     const to = getOwnedAnalysis(req.query.to, req.user.id)
     if (!from || !to) return res.status(404).json({ error: "Analysis not found." })

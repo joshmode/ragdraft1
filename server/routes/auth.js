@@ -10,8 +10,18 @@ const router = Router()
 router.post("/register", async (req, res) => {
     const { username, password, display_name, role, email } = req.body
 
-    if (!username?.trim() || !password?.trim() || !display_name?.trim()) {
+    // "?." only guards null/undefined - a JSON body can send any type (e.g. username: {}
+    // or role: 5), and calling .trim()/.toLowerCase() on a non-string throws synchronously
+    // inside this async handler, which Express 4 doesn't catch, crashing the whole process
+    if (typeof username !== "string" || typeof password !== "string" || typeof display_name !== "string" ||
+        !username.trim() || !password.trim() || !display_name.trim()) {
         return res.status(400).json({ error: "Display name, username, and password are required." })
+    }
+    if (role !== undefined && typeof role !== "string") {
+        return res.status(400).json({ error: "Role must be candidate or mentor." })
+    }
+    if (email !== undefined && typeof email !== "string") {
+        return res.status(400).json({ error: "Invalid email." })
     }
     if (password.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters." })
@@ -53,7 +63,7 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
     const { username, password } = req.body
 
-    if (!username?.trim() || !password?.trim()) {
+    if (typeof username !== "string" || typeof password !== "string" || !username.trim() || !password.trim()) {
         return res.status(400).json({ error: "Username and password are required." })
     }
 

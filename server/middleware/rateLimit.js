@@ -19,12 +19,15 @@ export const generalLimiter = rateLimit({
     handler: rateLimitHandler("Too many requests. Please slow down and try again shortly."),
 })
 
-// polling/highlighting fire constantly and shouldn't eat the general budget
+// polling/highlighting fire constantly and shouldn't eat the general budget. Keyed per
+// authenticated user rather than IP - this only ever sits behind authenticateToken, so a
+// shared corporate/NAT IP doesn't share one bucket across unrelated users
 export const pollLimiter = rateLimit({
     windowMs: 60 * 1000,
     limit: 90,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req) => req.user?.id ? `user:${req.user.id}` : req.ip,
     handler: rateLimitHandler("Refreshing too frequently. Please wait a moment."),
 })
 
@@ -49,11 +52,14 @@ export const guestLimiter = rateLimit({
     handler: rateLimitHandler("Too many guest sessions started from this connection. Please wait a while, or create an account instead."),
 })
 
-// analysis/generation burns API budget, not just CPU - worth protecting most
+// analysis/generation burns API budget, not just CPU - worth protecting most. Keyed per
+// authenticated user (see pollLimiter above) - every mount point of this limiter runs
+// after authenticateToken, so req.user is always populated by the time this fires
 export const llmLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 30,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req) => req.user?.id ? `user:${req.user.id}` : req.ip,
     handler: rateLimitHandler("Too many analysis requests. Please wait a few minutes before trying again."),
 })

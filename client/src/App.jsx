@@ -190,8 +190,8 @@ function AuthPage() {
                 <h2>Welcome to RAGsToRiches</h2>
                 <p className="auth-sub">Sign in or create an account to get started.</p>
                 <div className="auth-tabs">
-                    <button className={`auth-tab ${tab === "login" ? "active" : ""}`} onClick={() => setTab("login")}>Sign In</button>
-                    <button className={`auth-tab ${tab === "register" ? "active" : ""}`} onClick={() => setTab("register")}>Register</button>
+                    <button className={`auth-tab ${tab === "login" ? "active" : ""}`} onClick={() => { setTab("login"); setError("") }}>Sign In</button>
+                    <button className={`auth-tab ${tab === "register" ? "active" : ""}`} onClick={() => { setTab("register"); setError("") }}>Register</button>
                 </div>
                 <form onSubmit={submit}>
                     {tab === "register" && <>
@@ -340,6 +340,10 @@ function formatFileSize(bytes) {
 }
 
 function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnalyse, busy }) {
+    // react-dropzone's onDrop also receives fileRejections - the server's own
+    // allowedExtensions accepts .doc too (multer filter in analysis.js), but it was
+    // missing here, so a legacy .doc resume silently did nothing with zero feedback
+    const [rejectionError, setRejectionError] = useState("")
     const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
         multiple: false,
         noClick: !!file,
@@ -347,18 +351,22 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
         accept: {
             "application/pdf": [".pdf"],
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+            "application/msword": [".doc"],
             "application/vnd.oasis.opendocument.text": [".odt"],
             "text/plain": [".txt", ".md"],
             "application/zip": [".zip"],
         },
-        onDrop: files => setFile(files[0] || null),
+        onDrop: (accepted, rejections) => {
+            setRejectionError(rejections.length ? "That file type isn't supported. Please upload a PDF, DOCX, DOC, ODT, TXT, MD, or ZIP file." : "")
+            if (accepted.length) setFile(accepted[0])
+        },
     })
 
     return <section className="setup-band">
         <div className="card">
             <div className="two-col">
                 <div>
-                    <span className="section-label">Resume PDF / DOCX / ODT / TXT / MD / LinkedIn ZIP</span>
+                    <span className="section-label">Resume PDF / DOCX / DOC / ODT / TXT / MD / LinkedIn ZIP</span>
                     <div {...getRootProps()} className={`dropzone ${isDragActive ? "active" : ""} ${file ? "has-file" : ""}`}>
                         <input {...getInputProps()} />
                         {file ? (
@@ -375,6 +383,7 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
                             </div>
                         ) : "Drop your resume here, or click to upload"}
                     </div>
+                    {rejectionError && <p className="error-msg">{rejectionError}</p>}
                 </div>
                 <div>
                     <span className="section-label">Job Description <small>(optional for ATS matching)</small></span>
@@ -780,6 +789,7 @@ function SavedIndicator({ state }) {
 
 function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText, onExport, fullName, company }) {
     const [busy, setBusy] = useState(false)
+    const [exportBusy, setExportBusy] = useState(false)
     const [error, setError] = useState("")
     const [mobileTab, setMobileTab] = useState("edit")
     const [saveState, setSaveState] = useState("idle")
@@ -837,6 +847,7 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     }
 
     async function downloadExport(kind) {
+        setExportBusy(true)
         try {
             const res = await api.post(`/generate/${kind}`, { text, filename: `${baseFilename}.${kind}` }, { responseType: "blob" })
             const href = URL.createObjectURL(res.data)
@@ -849,6 +860,8 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
             toast(`${kind.toUpperCase()} downloaded`)
         } catch (err) {
             setError(`Export failed: ${await getBlobError(err)}`)
+        } finally {
+            setExportBusy(false)
         }
     }
 
@@ -878,9 +891,9 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
                 </div>
             </div>
             <div className="export-row">
-                <button className="btn-dark" onClick={() => { downloadText(text, `${baseFilename}.md`); onExport?.(); toast("Markdown downloaded") }}><FileText size={15} /> Markdown</button>
-                <button className="btn-dark" onClick={() => downloadExport("docx")}><FileEdit size={15} /> DOCX</button>
-                <button className="btn-dark" onClick={() => downloadExport("pdf")}><FileOutput size={15} /> PDF</button>
+                <button className="btn-dark" disabled={exportBusy} onClick={() => { downloadText(text, `${baseFilename}.md`); onExport?.(); toast("Markdown downloaded") }}><FileText size={15} /> Markdown</button>
+                <button className="btn-dark" disabled={exportBusy} onClick={() => downloadExport("docx")}><FileEdit size={15} /> DOCX</button>
+                <button className="btn-dark" disabled={exportBusy} onClick={() => downloadExport("pdf")}><FileOutput size={15} /> PDF</button>
             </div>
         </>}
     </section>
@@ -891,7 +904,7 @@ const SECTION_ORDER = [
     "AWARDS", "PUBLICATIONS", "VOLUNTEER", "LANGUAGES", "INTERESTS", "REFERENCES",
 ]
 
-function Analytics({ result, history, decisions }) {
+function Insights({ result, history, decisions }) {
     const timing = result.timing || {}
     const [consent, setConsent] = useState(false)
     const [confidence, setConfidence] = useState("")
@@ -901,7 +914,7 @@ function Analytics({ result, history, decisions }) {
     const [overview, setOverview] = useState(null)
 
     useEffect(() => {
-        api.get("/analysis/analytics/overview").then(res => setOverview(res.data.analyses || [])).catch(() => setOverview([]))
+        api.get("/analysis/insights/overview").then(res => setOverview(res.data.analyses || [])).catch(() => setOverview([]))
     }, [])
 
     async function submitFeedback() {
@@ -948,7 +961,7 @@ function Analytics({ result, history, decisions }) {
     const titleCase = s => s[0] + s.slice(1).toLowerCase()
 
     return <section>
-        <h2 className="view-title">Analytics</h2>
+        <h2 className="view-title">Insights</h2>
 
         <div className="metric-grid">
             <div className="stat-card">
@@ -1126,8 +1139,16 @@ function CandidateDetail({ candidate, onBack }) {
     // loads the highlighted original PDF and the rewritten-preview markdown for whichever
     // analysis is currently open - both mirror what the candidate's own views render
     useEffect(() => {
-        if (!analysis) { setPdfUrl(""); setPreviewMarkdown(""); setPreviewEdited(""); return undefined }
+        // every prior blob URL must be revoked exactly once, whether this effect is
+        // tearing down because a NEW analysis was opened, the candidate view closed, or the
+        // request never even finished - setPdfUrl's functional form always has the real
+        // previous value to revoke (mirrors RewriteReview's equivalent PDF-highlight effect)
+        if (!analysis) {
+            setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev); return "" })
+            setPreviewMarkdown(""); setPreviewEdited(""); return undefined
+        }
         let cancelled = false
+        let createdUrl = ""
         const items = Object.entries(analysis.results?.rewrites || {}).flatMap(([, list]) =>
             list.filter(it => it.framework_used !== "none" && it.framework_used !== "error").map(it => ({
                 id: it.id, text: it.highlight_text || it.original || "", severity: it.severity || "yellow",
@@ -1139,8 +1160,10 @@ function CandidateDetail({ candidate, onBack }) {
                 const fileRes = await api.get(`/mentor/candidates/${candidate.id}/resumes/${analysis.resume_id}/file`, { responseType: "blob" })
                 const fileB64 = await fileToBase64(fileRes.data)
                 const hlRes = await api.post("/analysis/highlight", { file: fileB64, items, active_key: "" }, { responseType: "blob" })
-                if (!cancelled) setPdfUrl(URL.createObjectURL(hlRes.data))
-            } catch { if (!cancelled) setPdfUrl("") }
+                if (cancelled) return
+                createdUrl = URL.createObjectURL(hlRes.data)
+                setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev); return createdUrl })
+            } catch { if (!cancelled) setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev); return "" }) }
         }
         async function loadPreview() {
             try {
@@ -1150,7 +1173,12 @@ function CandidateDetail({ candidate, onBack }) {
         }
         loadPdf()
         loadPreview()
-        return () => { cancelled = true }
+        return () => {
+            cancelled = true
+            // only reached if the request resolved after cancellation, before setPdfUrl
+            // (and therefore the revoke-on-replace above) ever ran for this URL
+            if (createdUrl) URL.revokeObjectURL(createdUrl)
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [analysis?.id])
 
@@ -1513,6 +1541,12 @@ function JobMatching({ result, provider, localEndpoint, jobMatchState, setJobMat
     const [scrapeBusy, setScrapeBusy] = useState(false)
     const [linkedinBusy, setLinkedinBusy] = useState(false)
     const [error, setError] = useState("")
+    // a compare() in flight when a newer analysis replaces `result` (e.g. via the
+    // "Reanalyse Resume" shortcut) must not let its now-stale response overwrite
+    // jobMatchState.comparison once it resolves - this ref always reflects the CURRENT
+    // analysis, independent of compare()'s own closure over the analysis it started against
+    const resultAnalysisIdRef = useRef(result.analysis_id)
+    useEffect(() => { resultAnalysisIdRef.current = result.analysis_id }, [result.analysis_id])
 
     function patch(fields) { setJobMatchState(prev => ({ ...prev, ...fields })) }
 
@@ -1528,15 +1562,20 @@ function JobMatching({ result, provider, localEndpoint, jobMatchState, setJobMat
     async function compare() {
         setError("")
         setCompareBusy(true)
+        const requestedAnalysisId = result.analysis_id
         try {
             const res = await api.post("/scrape/compare", { resume_text: result.raw_text || "", jd_text: scraped || result.job_description || "", provider, local_endpoint: localEndpoint, job_id: jobId, analysis_id: result.analysis_id })
+            if (requestedAnalysisId !== resultAnalysisIdRef.current) return // a newer analysis replaced this one while the request was in flight
             if (res.data.error) {
                 setError(`Comparison failed: ${res.data.error}`)
                 patch({ comparison: null })
             } else {
                 patch({ comparison: res.data, company: res.data.company || "" })
             }
-        } catch (err) { setError(getError(err)) } finally { setCompareBusy(false) }
+        } catch (err) {
+            if (requestedAnalysisId !== resultAnalysisIdRef.current) return
+            setError(getError(err))
+        } finally { setCompareBusy(false) }
     }
 
     async function scrapeLinkedIn() {
@@ -1550,7 +1589,7 @@ function JobMatching({ result, provider, localEndpoint, jobMatchState, setJobMat
 
     const profileError = linkedinProfile?.error
     const activeJD = scraped || result.job_description || ""
-    const anyShortcutBusy = analysing || busyAction !== ""
+    const anyShortcutBusy = analysing || busyAction !== "" || compareBusy
     const matchedKeywordResult = comparison ? {
         jd_keywords: [...(comparison.strong_matches || []), ...(comparison.missing_skills || [])],
         missing_keywords: comparison.missing_skills || [],
@@ -1726,7 +1765,14 @@ function App() {
     // while `hidden` is true, and the scroll guard above stops new hides but can't undo one
     useEffect(() => {
         function onResize() {
-            if (window.innerWidth <= 640 && navHidden) setNavHidden(false)
+            if (window.innerWidth <= 640 && navHidden) {
+                setNavHidden(false)
+                // every other un-hide (onShow, the scroll-up branch above) re-anchors here too -
+                // without it, a later desktop-width scroll measures delta against a stale,
+                // much-lower position from before this resize and can re-hide the nav
+                // almost immediately, on a scroll of only a few px
+                navScrollAnchorRef.current = window.scrollY
+            }
         }
         window.addEventListener("resize", onResize)
         return () => window.removeEventListener("resize", onResize)
@@ -1922,7 +1968,7 @@ function App() {
                     {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} fullName={fullName} />}
                     {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} />}
                     {view === "Mentor Feedback" && <FeedbackInbox />}
-                    {view === "Insights" && <Analytics result={result} history={history} decisions={decisions} />}
+                    {view === "Insights" && <Insights result={result} history={history} decisions={decisions} />}
                     {view === "Job Matching" && <JobMatching
                         result={result} provider={provider} localEndpoint={localEndpoint}
                         jobMatchState={jobMatchState} setJobMatchState={setJobMatchState}

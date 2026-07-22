@@ -6,6 +6,7 @@ import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
 import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
+import { llmLimiter } from "../middleware/rateLimit.js"
 
 const router = Router()
 const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
@@ -38,7 +39,7 @@ router.post("/jd", authenticateToken, async (req, res) => {
         ).run(req.user.id, String(req.body.url || ""), sourceName, text)
         res.json({ ...data, job_id: saved.lastInsertRowid })
     } catch (err) {
-        res.status(500).json({ error: `Scrape failed: ${err.message}` })
+        res.status(500).json({ error: "Scrape failed. Please try again." })
     }
 })
 
@@ -58,6 +59,16 @@ router.get("/jobs", authenticateToken, (req, res) => {
     res.json(rows)
 })
 
+// Number(x) on a non-scalar body value (e.g. {}) yields NaN rather than throwing, unlike
+// parseInt on an object - but a bare truthy-check on the raw value before coercing (the
+// bug pattern this replaces) let a NaN slip past the falsy-check below and reach a SQL
+// bind call, which better-sqlite3 rejects; Number.isFinite closes that gap
+function toIdOrNull(raw) {
+    if (!raw) return null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+}
+
 router.post("/linkedin", authenticateToken, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
     try {
@@ -68,12 +79,12 @@ router.post("/linkedin", authenticateToken, async (req, res) => {
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
-        const analysisId = req.body.analysis_id ? Number(req.body.analysis_id) : null
-        if (analysisId && !getOwnedAnalysis(analysisId, req.user.id)) {
+        const analysisId = toIdOrNull(req.body.analysis_id)
+        if (req.body.analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
             return res.status(404).json({ error: "Analysis not found." })
         }
-        const jobId = req.body.job_id ? Number(req.body.job_id) : null
-        if (jobId) {
+        const jobId = toIdOrNull(req.body.job_id)
+        if (req.body.job_id) {
             const job = getDb().prepare("SELECT id FROM job_descriptions WHERE id = ? AND user_id = ?").get(jobId, req.user.id)
             if (!job) return res.status(404).json({ error: "Job description not found." })
         }
@@ -82,11 +93,11 @@ router.post("/linkedin", authenticateToken, async (req, res) => {
         ).run(req.user.id, jobId, analysisId, JSON.stringify(data))
         res.json({ ...data, match_id: saved.lastInsertRowid })
     } catch (err) {
-        res.status(500).json({ error: `LinkedIn scrape failed: ${err.message}` })
+        res.status(500).json({ error: "LinkedIn scrape failed. Please try again." })
     }
 })
 
-router.post("/compare", authenticateToken, async (req, res) => {
+router.post("/compare", authenticateToken, llmLimiter, async (req, res) => {
     const provider = req.body.provider
     if (!PROVIDER_CHOICES.has(provider)) {
         return res.status(400).json({ error: "Unknown provider." })
@@ -94,12 +105,12 @@ router.post("/compare", authenticateToken, async (req, res) => {
     if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
         return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
     }
-    const analysisId = req.body.analysis_id ? Number(req.body.analysis_id) : null
-    if (analysisId && !getOwnedAnalysis(analysisId, req.user.id)) {
+    const analysisId = toIdOrNull(req.body.analysis_id)
+    if (req.body.analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
         return res.status(404).json({ error: "Analysis not found." })
     }
-    const jobId = req.body.job_id ? Number(req.body.job_id) : null
-    if (jobId) {
+    const jobId = toIdOrNull(req.body.job_id)
+    if (req.body.job_id) {
         const job = getDb().prepare("SELECT id FROM job_descriptions WHERE id = ? AND user_id = ?").get(jobId, req.user.id)
         if (!job) return res.status(404).json({ error: "Job description not found." })
     }
@@ -149,7 +160,7 @@ router.post("/compare", authenticateToken, async (req, res) => {
         ).run(req.user.id, jobId, analysisId, JSON.stringify(data), contentHash)
         res.json({ ...data, match_id: saved.lastInsertRowid })
     } catch (err) {
-        res.status(500).json({ error: `Comparison failed: ${err.message}` })
+        res.status(500).json({ error: "Comparison failed. Please try again." })
     }
 })
 

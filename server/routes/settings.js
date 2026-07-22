@@ -50,7 +50,7 @@ router.post("/api-key", authenticateToken, (req, res) => {
         saveUserApiKey(req.user.id, provider, key)
         res.json({ ok: true })
     } catch (err) {
-        res.status(500).json({ error: `Failed to save key: ${err.message}` })
+        res.status(500).json({ error: "Failed to save key. Please try again." })
     }
 })
 
@@ -73,7 +73,10 @@ router.get("/feedback-status", async (req, res) => {
     }
 })
 
-router.post("/silence-feedback", async (req, res) => {
+// mutates shared/global engine state (unlike the GET routes above, which only ever read
+// public/non-sensitive info) - was reachable with no auth at all, letting anyone silence
+// feedback prompts app-wide
+router.post("/silence-feedback", authenticateToken, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
     try {
         await fetch(`${engineUrl}/silence-feedback`, { method: "POST" })

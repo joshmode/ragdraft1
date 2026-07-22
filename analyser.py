@@ -363,6 +363,12 @@ def rewrite_chunk(
                 text, results[i].get("rewritten", text), results[i],
                 usr_prompt_single, sys_prompt, provider, local_endpoint, model, api_key=api_key,
             )
+            # _run_critic can replace the whole dict wholesale (its repair-retry path does
+            # `result = _parse_json(retry_raw)`, which only matches _RESULT_SCHEMA and has
+            # no "original" key) - re-set it after the call, same as rewrite_item already
+            # does, instead of before it like this loop used to, which silently dropped
+            # "original" on any bullet whose critic-repair retry actually parsed cleanly
+            results[i]["original"] = text
 
     return results
 
@@ -784,7 +790,11 @@ def analyse(
         "score":               score,
         "warnings":            resume.warnings,
         "ocr_used":            resume.ocr_used,
-        "no_jd_provided":      len(jd_kws) == 0,
+        # "no jd" and "keyword extraction failed" must stay distinguishable (see
+        # keyword_extraction_failed above and extract_jd_kws's docstring) - this used to be
+        # len(jd_kws) == 0, which is true in BOTH cases, so a real extraction failure on a
+        # JD the user did paste in was misreported as "no job description was provided"
+        "no_jd_provided":      not job_description.strip(),
         "timing": {
             "keywords_ms":   int(t_kw * 1000),
             "retrieval_ms":  int(t_retrieval * 1000),
@@ -947,8 +957,12 @@ def gen_cv(
             result += f"\n\n## {sec}\n---\n" + "\n".join(f"- {line}" for line in applied)
         return result
     except Exception as e:
+        # was silently returning this string as the "generated CV" (always HTTP 200) -
+        # a provider timeout/rate-limit could get exported as the user's whole resume.
+        # re-raising lets engine_api.py's generic error handler return a real 500,
+        # matching every sibling endpoint (/analyse, /scrape-jd, /compare-resume-jd, ...)
         print(f"cv generation failed: {e}")
-        return f"CV generation failed: {e}"
+        raise
 
 
 def gen_cover_letter(
@@ -1001,4 +1015,4 @@ def gen_cover_letter(
         return raw.strip()
     except Exception as e:
         print(f"cover letter generation failed: {e}")
-        return f"Cover letter generation failed: {e}"
+        raise

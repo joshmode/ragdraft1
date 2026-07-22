@@ -14,7 +14,7 @@ import scraperRoutes from "./routes/scraper.js"
 import settingsRoutes from "./routes/settings.js"
 import feedbackRoutes from "./routes/feedback.js"
 import { getDb } from "./db.js"
-import { generalLimiter, authLimiter, llmLimiter } from "./middleware/rateLimit.js"
+import { generalLimiter, authLimiter } from "./middleware/rateLimit.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -24,6 +24,15 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") })
 const app = express()
 const PORT = process.env.API_PORT || 3000
 const ENGINE_URL = process.env.ENGINE_URL || "http://localhost:5001"
+
+// belt-and-suspenders: Express 4 never routes an async handler's thrown/rejected error to
+// the error-handling middleware below - a single overlooked edge case (an oversight this
+// codebase has had before) crashes the entire process for every concurrent user instead of
+// just failing the one bad request. This can't rescue that one request (no res in scope
+// here), but it stops one bad input from taking the whole server down.
+process.on("unhandledRejection", (err) => {
+    console.error("Unhandled rejection:", err)
+})
 
 getDb()
 
@@ -65,7 +74,6 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", generalLimiter)
 app.use("/api/auth", authLimiter, authRoutes)
-app.use("/api/analysis/run", llmLimiter)
 app.use("/api/generate", generationRoutes)
 app.use("/api/analysis", analysisRoutes)
 app.use("/api/mentor", mentorRoutes)
