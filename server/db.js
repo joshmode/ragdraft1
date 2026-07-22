@@ -18,6 +18,7 @@ function initDb(db) {
             display_name TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'candidate',
             email TEXT DEFAULT '',
+            is_guest INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS resumes (
@@ -185,6 +186,53 @@ function initDb(db) {
         db.exec("ALTER TABLE analyses ADD COLUMN content_hash TEXT DEFAULT ''")
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_analyses_content_hash ON analyses(content_hash)")
+
+    const userColumns = db.prepare("PRAGMA table_info(users)").all().map(col => col.name)
+    if (!userColumns.includes("is_guest")) {
+        db.exec("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+const GUEST_RETENTION_HOURS = parseInt(process.env.GUEST_RETENTION_HOURS || "24", 10)
+
+// guests get a real DB row (see server/routes/auth.js) so every existing per-user feature
+// works unmodified, but that means their resume/analysis content actually is written to
+// disk - unlike a real account, nothing ever points back at it (no password, token only in
+// sessionStorage), so it's swept away after GUEST_RETENTION_HOURS instead of lingering
+// forever. Runs lazily whenever a new guest session is created - no cron needed.
+export function deleteExpiredGuests(db) {
+    const expired = db.prepare(
+        "SELECT id FROM users WHERE is_guest = 1 AND created_at < datetime('now', ?)"
+    ).all(`-${GUEST_RETENTION_HOURS} hours`)
+
+    for (const { id: userId } of expired) {
+        deleteGuestUser(db, userId)
+    }
+}
+
+// every DELETE below uses a subquery (never a precomputed id list) so it always sees the
+// current state of the guest's own rows, and runs before the analyses/resumes rows it
+// depends on are removed further down - order matters, children before parents
+function deleteGuestUser(db, userId) {
+    const del = db.transaction(() => {
+        db.prepare("DELETE FROM rewrite_decisions WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?)").run(userId)
+        db.prepare("DELETE FROM annotations WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
+        db.prepare(
+            "DELETE FROM revision_snapshots WHERE resume_id IN (SELECT id FROM resumes WHERE user_id = ?) OR analysis_id IN (SELECT id FROM analyses WHERE user_id = ?)"
+        ).run(userId, userId)
+        db.prepare("DELETE FROM generated_documents WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
+        db.prepare("DELETE FROM job_matches WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
+        db.prepare("DELETE FROM evaluation_feedback WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
+        db.prepare("DELETE FROM mentor_feedback WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR candidate_id = ? OR mentor_id = ?").run(userId, userId, userId)
+        db.prepare("DELETE FROM session_participants WHERE user_id = ?").run(userId)
+        db.prepare("DELETE FROM user_api_keys WHERE user_id = ?").run(userId)
+        db.prepare("DELETE FROM analysis_jobs WHERE user_id = ? OR resume_id IN (SELECT id FROM resumes WHERE user_id = ?)").run(userId, userId)
+        db.prepare("DELETE FROM job_descriptions WHERE user_id = ?").run(userId)
+        db.prepare("DELETE FROM analyses WHERE user_id = ?").run(userId)
+        db.prepare("DELETE FROM resumes WHERE user_id = ?").run(userId)
+        db.prepare("DELETE FROM users WHERE id = ?").run(userId)
+    })
+    del()
 }
 
 export function getDb() {

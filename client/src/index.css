@@ -544,6 +544,26 @@ select.input-field {
 .error-msg { color: #E5534B; font-size: 0.82rem; margin-top: 0.5rem; }
 .success-msg { color: #15C39A; font-size: 0.82rem; margin-top: 0.5rem; }
 .auth-submit-btn { margin-top: 0.75rem; }
+.auth-guest-row {
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid #E8EAED;
+    text-align: center;
+}
+.auth-guest-link {
+    background: transparent;
+    border: 0;
+    color: #6B7280;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.auth-guest-link:hover { color: #0D0F11; }
+.auth-guest-link:disabled { cursor: not-allowed; opacity: 0.6; }
+.auth-guest-note { margin-top: 0.5rem; font-size: 0.72rem; }
 
 .model-bar {
     display: flex; align-items: center; gap: 1.5rem; margin-bottom: 1rem;

@@ -1,7 +1,9 @@
 import { Router } from "express"
 import bcrypt from "bcrypt"
-import { getDb } from "../db.js"
+import crypto from "crypto"
+import { getDb, deleteExpiredGuests } from "../db.js"
 import { generateToken, authenticateToken } from "../middleware/auth.js"
+import { guestLimiter } from "../middleware/rateLimit.js"
 
 const router = Router()
 
@@ -41,6 +43,7 @@ router.post("/register", async (req, res) => {
         username: username.trim().toLowerCase(),
         display_name: display_name.trim(),
         role: requestedRole,
+        is_guest: false,
     }
 
     const token = generateToken(user)
@@ -70,10 +73,56 @@ router.post("/login", async (req, res) => {
         username: row.username,
         display_name: row.display_name,
         role: row.role,
+        is_guest: !!row.is_guest,
     }
 
     const token = generateToken(user)
     res.json({ token, user })
+})
+
+// lets the tool stay usable without registering: a real (but ephemeral, unlisted)
+// account is created so every existing per-user feature - caching, decisions, generated
+// docs, tab-switch restore - works unmodified. The frontend keeps this session in
+// sessionStorage rather than localStorage, so nothing lets the guest come back to it
+// later, and their DB rows are actually deleted after GUEST_RETENTION_HOURS (see db.js) -
+// together that's what "no record kept for guests" means in practice here.
+//
+// guestLimiter (not just the shared authLimiter mounted on this whole router) matters:
+// this endpoint has no credentials to get wrong, so it always "succeeds", and authLimiter
+// skips successful requests - without a limiter that counts successes too, a client could
+// trigger unlimited cost-12 bcrypt hashes and permanent row inserts.
+router.post("/guest", guestLimiter, async (req, res) => {
+    const db = getDb()
+    deleteExpiredGuests(db)
+
+    let username = ""
+    for (let attempt = 0; attempt < 5 && !username; attempt++) {
+        const candidate = `guest_${crypto.randomBytes(6).toString("hex")}`
+        if (!db.prepare("SELECT id FROM users WHERE username = ?").get(candidate)) {
+            username = candidate
+        }
+    }
+    if (!username) {
+        return res.status(500).json({ error: "Could not start a guest session. Please try again." })
+    }
+
+    const randomPassword = crypto.randomBytes(32).toString("hex")
+    const hash = await bcrypt.hash(randomPassword, 12)
+    const stmt = db.prepare(
+        "INSERT INTO users (username, password_hash, display_name, role, email, is_guest, created_at) VALUES (?, ?, ?, ?, ?, 1, datetime('now'))"
+    )
+    const result = stmt.run(username, hash, "Guest", "candidate", "")
+
+    const user = {
+        id: result.lastInsertRowid,
+        username,
+        display_name: "Guest",
+        role: "candidate",
+        is_guest: true,
+    }
+
+    const token = generateToken(user)
+    res.status(201).json({ token, user })
 })
 
 router.get("/me", authenticateToken, (req, res) => {
