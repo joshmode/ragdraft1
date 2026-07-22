@@ -109,6 +109,7 @@ function initDb(db) {
             user_id INTEGER NOT NULL,
             document_type TEXT NOT NULL,
             content TEXT NOT NULL,
+            company TEXT DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (analysis_id) REFERENCES analyses(id),
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -128,6 +129,7 @@ function initDb(db) {
             job_description_id INTEGER,
             analysis_id INTEGER,
             result_json TEXT NOT NULL,
+            content_hash TEXT DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (job_description_id) REFERENCES job_descriptions(id),
@@ -191,6 +193,17 @@ function initDb(db) {
     if (!userColumns.includes("is_guest")) {
         db.exec("ALTER TABLE users ADD COLUMN is_guest INTEGER NOT NULL DEFAULT 0")
     }
+
+    const genDocColumns = db.prepare("PRAGMA table_info(generated_documents)").all().map(col => col.name)
+    if (!genDocColumns.includes("company")) {
+        db.exec("ALTER TABLE generated_documents ADD COLUMN company TEXT DEFAULT ''")
+    }
+
+    const jobMatchColumns = db.prepare("PRAGMA table_info(job_matches)").all().map(col => col.name)
+    if (!jobMatchColumns.includes("content_hash")) {
+        db.exec("ALTER TABLE job_matches ADD COLUMN content_hash TEXT DEFAULT ''")
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_job_matches_content_hash ON job_matches(content_hash)")
 }
 
 const GUEST_RETENTION_HOURS = parseInt(process.env.GUEST_RETENTION_HOURS || "24", 10)

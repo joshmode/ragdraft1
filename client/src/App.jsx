@@ -4,9 +4,10 @@ import { useDropzone } from "react-dropzone"
 import ReactMarkdown from "react-markdown"
 import {
     MessageSquareText, SearchCheck, FileText, FileEdit, Mail, Briefcase, BarChart3, Users,
-    ClipboardList, FileOutput, Target, PanelLeftClose, PanelLeftOpen, IdCard, TrendingUp,
-    TrendingDown, Check, X, ChevronLeft, ChevronRight, UploadCloud, Sparkles, ClipboardCheck,
-    Download, CheckCircle2, XCircle, LogIn, LogOut, Loader2, KeyRound, Lightbulb,
+    FileOutput, PanelLeftClose, PanelLeftOpen, IdCard, TrendingUp,
+    TrendingDown, Check, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, UploadCloud, Sparkles,
+    ClipboardCheck, Download, CheckCircle2, XCircle, LogIn, LogOut, Loader2, KeyRound, Lightbulb,
+    File, RotateCw, Trash2, Clock, PenSquare, Building2, Ban,
 } from "lucide-react"
 import api from "./api/client"
 import { useAuth } from "./context/AuthContext"
@@ -20,27 +21,21 @@ const PROVIDER_OPTIONS = [
     { key: "local", label: "Local LLM", byok: false },
 ]
 
-// grouped into workflow stages (rather than one flat row of equally-weighted tabs) with an
-// icon per tab, rendered by TopNav
-const NAV_GROUPS = [
-    { label: "Review", icon: ClipboardList, items: [
-        { key: "Suggestions", icon: MessageSquareText },
-        { key: "Keyword Gap", icon: SearchCheck },
-        { key: "Extracted Sections", icon: FileText },
-    ] },
-    { label: "Generate", icon: FileOutput, items: [
-        { key: "Tailored CV", icon: FileEdit },
-        { key: "Cover Letter", icon: Mail },
-    ] },
-    { label: "Optimize", icon: Target, items: [
-        { key: "Job Matching", icon: Briefcase },
-    ] },
-    { label: "Insights", icon: BarChart3, items: [
-        { key: "Analytics", icon: BarChart3 },
-        { key: "Mentor Feedback", icon: Users },
-    ] },
+// the collapsed nav stays a single row of only the core review/generate workflow; the
+// less-frequently-needed views live behind the More toggle instead of competing for space
+const ALWAYS_NAV = [
+    { key: "Suggestions", icon: MessageSquareText },
+    { key: "Keyword Gap", icon: SearchCheck },
+    { key: "Tailored CV", icon: FileEdit },
+    { key: "Cover Letter", icon: Mail },
 ]
-const NAV_ITEMS = NAV_GROUPS.flatMap(g => g.items.map(i => i.key))
+const MORE_NAV = [
+    { key: "Insights", icon: BarChart3 },
+    { key: "Mentor Feedback", icon: Users },
+    { key: "Job Matching", icon: Briefcase },
+    { key: "Extracted Sections", icon: FileText },
+]
+const NAV_ITEMS = [...ALWAYS_NAV, ...MORE_NAV].map(i => i.key)
 
 const PIPELINE_STEPS = [
     { key: "upload", label: "Upload Resume", icon: UploadCloud },
@@ -238,20 +233,44 @@ function Hero() {
     </section>
 }
 
-function TopNav({ view, setView }) {
+// one consistent, always-visible sign-in/sign-out control above the Hero, replacing the
+// sign-out button that used to appear in three different places (mentor topbar, the
+// pre-analysis model bar, and the sidebar) depending on which screen you were on
+function AuthBar({ user, onLogout }) {
+    return <div className="auth-bar">
+        {user ? <>
+            <span className="auth-bar-status">{user.is_guest ? "Browsing as " : "Signed in as "}<b>{user.display_name}</b></span>
+            <button className="btn-ghost btn-small" onClick={onLogout}>{user.is_guest ? <><LogIn size={13} /> Sign In</> : <><LogOut size={13} /> Sign Out</>}</button>
+        </> : <span className="auth-bar-status">Sign In</span>}
+    </div>
+}
+
+function TopNav({ view, setView, hidden, onShow }) {
+    const [moreOpen, setMoreOpen] = useState(false)
+
+    // scrolled far enough that the nav auto-hid itself - show only a floating toggle,
+    // identical in style to the sidebar's collapsed toggle, so it never floats over content
+    if (hidden) {
+        return <button className="nav-floating-toggle" onClick={onShow} title="Show navigation"><PanelLeftOpen size={16} /></button>
+    }
+
     return <nav className="top-nav">
-        {NAV_GROUPS.map(group => (
-            <div className="nav-group" key={group.label}>
-                <span className="nav-group-label"><group.icon size={12} />{group.label}</span>
-                <div className="nav-group-items">
-                    {group.items.map(({ key, icon: Icon }) => (
-                        <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)}>
-                            <Icon size={14} /><span>{key}</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-        ))}
+        <div className="nav-row">
+            {ALWAYS_NAV.map(({ key, icon: Icon }) => (
+                <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)}>
+                    <Icon size={14} /><span>{key}</span>
+                </button>
+            ))}
+            {moreOpen && <span className="nav-more-label">More</span>}
+            {moreOpen && MORE_NAV.map(({ key, icon: Icon }) => (
+                <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)}>
+                    <Icon size={14} /><span>{key}</span>
+                </button>
+            ))}
+            <button className="nav-more-toggle" onClick={() => setMoreOpen(!moreOpen)} title={moreOpen ? "Collapse" : "More"}>
+                {moreOpen ? <ChevronLeft size={16} /> : <ChevronDown size={16} />}
+            </button>
+        </div>
     </nav>
 }
 
@@ -280,18 +299,51 @@ function PipelineStepper({ file, busy, result, docs, exported }) {
 // combined response, so this can't reflect true per-stage progress, but it gives a sense
 // of the kind of work happening instead of a single static "please wait" message
 const PROCESSING_STAGE_LABELS = ["Extracting keywords…", "Matching sections…", "Rewriting bullets…", "Scoring resume…"]
+const BASE_ESTIMATE_SECONDS = 45
+
+// tracks real elapsed time every second, and re-derives the remaining-time estimate every
+// 15s - if we've already blown past the current estimate, that means the job is taking
+// longer than expected, so nudge the estimate up instead of freezing at "0s remaining"
+function useAnalysisProgress() {
+    const [elapsed, setElapsed] = useState(0)
+    const [estimate, setEstimate] = useState(BASE_ESTIMATE_SECONDS)
+    const startRef = useRef(Date.now())
+    useEffect(() => {
+        const tickId = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
+        const estimateId = setInterval(() => {
+            const nowElapsed = Math.floor((Date.now() - startRef.current) / 1000)
+            setEstimate(prev => (nowElapsed >= prev ? nowElapsed + 15 : prev))
+        }, 15000)
+        return () => { clearInterval(tickId); clearInterval(estimateId) }
+    }, [])
+    return { elapsed, remaining: Math.max(0, estimate - elapsed) }
+}
+
 function ProcessingStages() {
     const [idx, setIdx] = useState(0)
+    const { elapsed, remaining } = useAnalysisProgress()
     useEffect(() => {
         const t = setInterval(() => setIdx(i => (i + 1) % PROCESSING_STAGE_LABELS.length), 3500)
         return () => clearInterval(t)
     }, [])
-    return <>Analysing — {PROCESSING_STAGE_LABELS[idx]} usually under a minute</>
+    return <span className="processing-stages">
+        <span className="processing-stage-label">{PROCESSING_STAGE_LABELS[idx]}</span>
+        <span className="processing-timer"><Clock size={12} /> {elapsed}s elapsed · ~{remaining}s remaining</span>
+    </span>
+}
+
+function formatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return ""
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnalyse, busy }) {
-    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
         multiple: false,
+        noClick: !!file,
+        noKeyboard: !!file,
         accept: {
             "application/pdf": [".pdf"],
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
@@ -307,9 +359,21 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
             <div className="two-col">
                 <div>
                     <span className="section-label">Resume PDF / DOCX / ODT / TXT / MD / LinkedIn ZIP</span>
-                    <div {...getRootProps()} className={`dropzone ${isDragActive ? "active" : ""}`}>
+                    <div {...getRootProps()} className={`dropzone ${isDragActive ? "active" : ""} ${file ? "has-file" : ""}`}>
                         <input {...getInputProps()} />
-                        {file ? <span className="success">{file.name}</span> : "Drop your resume here, or click to upload"}
+                        {file ? (
+                            <div className="upload-card">
+                                <span className="upload-card-icon"><File size={20} /></span>
+                                <div className="upload-card-info">
+                                    <span className="upload-card-name" title={file.name}>{file.name}</span>
+                                    <span className="upload-card-meta"><CheckCircle2 size={12} /> {formatFileSize(file.size)} · Uploaded</span>
+                                </div>
+                                <div className="upload-card-actions">
+                                    <button type="button" className="btn-ghost btn-small" onClick={open}><RotateCw size={13} /> Replace</button>
+                                    <button type="button" className="upload-card-remove" onClick={() => setFile(null)} title="Remove file"><Trash2 size={15} /></button>
+                                </div>
+                            </div>
+                        ) : "Drop your resume here, or click to upload"}
                     </div>
                 </div>
                 <div>
@@ -317,7 +381,7 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
                     <textarea className="input-field" value={jobDescription} onChange={e => setJobDescription(e.target.value)} placeholder="Paste a full job description for keyword matching, or leave blank to improve the CV from rewrite decisions only." />
                 </div>
             </div>
-            <button className="btn-primary analyse-btn" disabled={!file || busy} onClick={onAnalyse}>{busy ? <><span className="spinner" /><ProcessingStages /></> : <><Sparkles size={16} /> Analyse resume</>}</button>
+            <button className="btn-primary analyse-btn" disabled={!file || busy} onClick={() => onAnalyse()}>{busy ? <><span className="spinner" /><ProcessingStages /></> : <><Sparkles size={16} /> Analyse resume</>}</button>
         </div>
     </section>
 }
@@ -500,9 +564,24 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
     const [comment, setComment] = useState("")
     const [pdfUrl, setPdfUrl] = useState("")
     const [error, setError] = useState("")
+    const [mentorEdits, setMentorEdits] = useState({})
     const actionable = useMemo(() => Object.entries(result.rewrites || {}).flatMap(([section, items]) => items.map((item, index) => ({ section, item, index, key: item.id || `${section}_${index}` })).filter(({ item }) => item.framework_used !== "none" && item.framework_used !== "error" && item.original !== item.rewritten)), [result])
     const count = actionable.length
     const current = actionable[Math.min(active, Math.max(count - 1, 0))]
+
+    // a mentor-suggested rewrite the candidate has already accepted overrides the LLM's own
+    // rewrite (see server/routes/generation.js's mentorOverridesFor) - fetched once per
+    // analysis and keyed by suggestion_key so the Suggested Rewrite column can show it
+    useEffect(() => {
+        if (!analysisId) { setMentorEdits({}); return }
+        api.get("/mentor/feedback/inbox").then(res => {
+            const map = {}
+            for (const f of res.data) {
+                if (f.feedback_type === "edit" && f.analysis_id === analysisId && f.suggestion_key) map[f.suggestion_key] = f
+            }
+            setMentorEdits(map)
+        }).catch(() => setMentorEdits({}))
+    }, [analysisId])
 
     // reset to the first suggestion on a fresh analysis instead of a stale index
     useEffect(() => { setActive(0) }, [analysisId])
@@ -632,12 +711,28 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
                 </div>
                 <span className="section-label">Rewrite Decision</span>
                 <div className={`suggestion-card ${state === true ? "accepted" : state === false ? "dismissed" : ""}`} key={current.key}>
-                    <div className="suggestion-head"><span className="suggestion-title"><span className={`severity-dot ${current.item.severity || "yellow"}`} />{current.section}</span><span className="fw-badge">{current.item.framework_used}</span></div>
-                    <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{current.item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">Suggested rewrite</span><p className="rewrite-text">{current.item.rewritten}</p></div></div>
+                    <div className="suggestion-head">
+                        <span className="suggestion-title"><span className={`severity-dot ${current.item.severity || "yellow"}`} />{current.section}</span>
+                        {state === true && <span className="status-pill status-pill-accepted"><CheckCircle2 size={12} /> Accepted</span>}
+                        {state === false && <span className="status-pill status-pill-rejected"><XCircle size={12} /> Rejected</span>}
+                        <span className="fw-badge">{current.item.framework_used}</span>
+                    </div>
+                    <div className="rewrite-grid">
+                        <div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{current.item.original}</p></div>
+                        <div className="rewrite-pane after">
+                            <span className="pane-label">Suggested rewrite</span>
+                            {mentorEdits[current.key]?.status === "accepted" ? (
+                                <>
+                                    <p className="rewrite-text rewrite-text-strike">{current.item.rewritten}</p>
+                                    <p className="rewrite-text mentor-rewrite-text"><Users size={12} /> {mentorEdits[current.key].suggested_text}</p>
+                                </>
+                            ) : <p className="rewrite-text">{current.item.rewritten}</p>}
+                        </div>
+                    </div>
                     <div className="reasoning-row"><Lightbulb size={13} /> {current.item.reasoning}</div>
                 </div>
                 <div className="decision-actions">
-                    <button className="btn-primary btn-accept" onClick={() => decide(true)}><Check size={16} /> Accept &amp; next</button>
+                    <button className={state === false ? "btn-outline-primary btn-accept" : "btn-primary btn-accept"} onClick={() => decide(true)}><Check size={16} /> Accept &amp; next</button>
                     <button className="btn-ghost" onClick={() => decide(false)}><X size={15} /> Dismiss &amp; next</button>
                 </div>
                 <AnnotationThread annotations={annotations} comment={comment} setComment={setComment} postComment={postComment} />
@@ -680,7 +775,7 @@ function SavedIndicator({ state }) {
     return <span className={`saved-indicator ${state}`}>{state === "saving" ? <><Loader2 size={12} className="spin-icon" /> Saving…</> : <><CheckCircle2 size={12} /> Saved</>}</span>
 }
 
-function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText, onExport }) {
+function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText, onExport, fullName, company }) {
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const [mobileTab, setMobileTab] = useState("edit")
@@ -688,6 +783,11 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     const title = type === "cv" ? "Tailored CV" : "Cover Letter"
     const documentType = type === "cv" ? "cv" : "cover_letter"
     const firstRun = useRef(true)
+    // FULL_NAME_RESUME for the generated CV, FULL_NAME_COMPANY_NAME for the cover letter -
+    // applied consistently across every export format
+    const baseFilename = type === "cv"
+        ? `${toFilenamePart(fullName)}_RESUME`
+        : `${toFilenamePart(fullName)}_${company ? toFilenamePart(company) : "COVER_LETTER"}`
 
     useEffect(() => {
         if (firstRun.current) { firstRun.current = false; return undefined }
@@ -721,6 +821,8 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
                 payload.rewrite_suggestions = result.rewrites
                 payload.rewrite_decisions = decisions
                 payload.acc_map = {}
+            } else if (company) {
+                payload.company = company
             }
             const res = await api.post(endpoint, payload)
             setText(type === "cv" ? res.data.cv_text : res.data.cover_letter_text)
@@ -733,11 +835,11 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
 
     async function downloadExport(kind) {
         try {
-            const res = await api.post(`/generate/${kind}`, { text, filename: type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}` }, { responseType: "blob" })
+            const res = await api.post(`/generate/${kind}`, { text, filename: `${baseFilename}.${kind}` }, { responseType: "blob" })
             const href = URL.createObjectURL(res.data)
             const link = document.createElement("a")
             link.href = href
-            link.download = type === "cv" ? `tailored_cv.${kind}` : `cover_letter.${kind}`
+            link.download = `${baseFilename}.${kind}`
             link.click()
             URL.revokeObjectURL(href)
             onExport?.()
@@ -773,7 +875,7 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
                 </div>
             </div>
             <div className="export-row">
-                <button className="btn-dark" onClick={() => { downloadText(text, type === "cv" ? "tailored_cv.md" : "cover_letter.md"); onExport?.(); toast("Markdown downloaded") }}><FileText size={15} /> Markdown</button>
+                <button className="btn-dark" onClick={() => { downloadText(text, `${baseFilename}.md`); onExport?.(); toast("Markdown downloaded") }}><FileText size={15} /> Markdown</button>
                 <button className="btn-dark" onClick={() => downloadExport("docx")}><FileEdit size={15} /> DOCX</button>
                 <button className="btn-dark" onClick={() => downloadExport("pdf")}><FileOutput size={15} /> PDF</button>
             </div>
@@ -898,7 +1000,7 @@ function Analytics({ result, history, decisions }) {
             <div className="three-col tech-metric-grid">{Object.entries(timing).map(([key, value]) => <div className="tech-metric" key={key}><div className="tech-metric-value">{formatDuration(value)}</div><div className="metric-label">{key.replace("_ms", "").replace("_", " ")}</div></div>)}</div>
         </details>
 
-        <div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div>
+        <div className="card evaluation-card"><span className="section-label">Optional Evaluation</span><p className="muted">Share anonymised confidence feedback without including your resume content.</p>{submitted ? <p className="success-msg">Thanks for your feedback.</p> : <><label className="toggle-wrap"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />I consent to store this evaluation response.</label><label className="form-group">Confidence in these recommendations<span className="confidence-scale-hint">1 = Worst · 5 = Best</span><select className="input-field" value={confidence} onChange={e => setConfidence(e.target.value)}><option value="">Select a rating</option>{[1, 2, 3, 4, 5].map(value => <option value={value} key={value}>{value}</option>)}</select></label><textarea className="input-field" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional qualitative feedback" />{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" disabled={!consent} onClick={submitFeedback}>Submit Feedback</button></>}</div>
     </section>
 }
 
@@ -932,6 +1034,7 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
             await api.post("/mentor/feedback", {
                 candidate_id: candidateId,
                 analysis_id: analysisId || null,
+                suggestion_key: prefill?.key || "",
                 feedback_type: type,
                 section,
                 original_text: originalText,
@@ -941,7 +1044,7 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
             setStatus("Sent.")
             setSuggestedText("")
             setComment("")
-            onSent?.()
+            onSent?.(suggestedText)
         } catch (err) {
             setStatus(getError(err))
         }
@@ -975,8 +1078,23 @@ function CandidateDetail({ candidate, onBack }) {
     const [diffTo, setDiffTo] = useState("")
     const [diff, setDiff] = useState(null)
     const [sent, setSent] = useState([])
-    const [prefill, setPrefill] = useState(null)
     const [error, setError] = useState("")
+    // item 17: Analysis History collapsed by default, opening a resume re-collapses it
+    const [historyOpen, setHistoryOpen] = useState(false)
+    // item 18: More menu (Analysis / Extracted Sections / Accepted AI Suggestions / Cover Letters)
+    const [moreOpen, setMoreOpen] = useState(false)
+    const [moreTab, setMoreTab] = useState("analysis")
+    const [coverLetters, setCoverLetters] = useState(null)
+    // item 18: Original PDF <-> Rewritten Preview toggle, directly editable
+    const [previewMode, setPreviewMode] = useState("original")
+    const [pdfUrl, setPdfUrl] = useState("")
+    const [previewMarkdown, setPreviewMarkdown] = useState("")
+    const [previewEdited, setPreviewEdited] = useState("")
+    const [previewDirty, setPreviewDirty] = useState(false)
+    // item 18: per-suggestion "Suggest Edit" pill -> attached composer
+    const [activeComposerKey, setActiveComposerKey] = useState(null)
+    // item 18: floating Compose button for general feedback unrelated to any suggestion
+    const [composeOpen, setComposeOpen] = useState(false)
 
     async function load() {
         try {
@@ -995,8 +1113,43 @@ function CandidateDetail({ candidate, onBack }) {
             const res = await api.get(`/mentor/candidates/${candidate.id}/analyses/${id}`)
             setAnalysis(res.data)
             setDiff(null)
+            setHistoryOpen(false)
+            setPreviewMode("original")
+            setPreviewDirty(false)
+            setActiveComposerKey(null)
         } catch (err) { setError(getError(err)) }
     }
+
+    // loads the highlighted original PDF and the rewritten-preview markdown for whichever
+    // analysis is currently open - both mirror what the candidate's own views render
+    useEffect(() => {
+        if (!analysis) { setPdfUrl(""); setPreviewMarkdown(""); setPreviewEdited(""); return undefined }
+        let cancelled = false
+        const items = Object.entries(analysis.results?.rewrites || {}).flatMap(([, list]) =>
+            list.filter(it => it.framework_used !== "none" && it.framework_used !== "error").map(it => ({
+                id: it.id, text: it.highlight_text || it.original || "", severity: it.severity || "yellow",
+                reasoning: it.reasoning || "", rewritten: it.rewritten || "",
+            }))
+        )
+        async function loadPdf() {
+            try {
+                const fileRes = await api.get(`/mentor/candidates/${candidate.id}/resumes/${analysis.resume_id}/file`, { responseType: "blob" })
+                const fileB64 = await fileToBase64(fileRes.data)
+                const hlRes = await api.post("/analysis/highlight", { file: fileB64, items, active_key: "" }, { responseType: "blob" })
+                if (!cancelled) setPdfUrl(URL.createObjectURL(hlRes.data))
+            } catch { if (!cancelled) setPdfUrl("") }
+        }
+        async function loadPreview() {
+            try {
+                const res = await api.get(`/mentor/candidates/${candidate.id}/analyses/${analysis.id}/preview`)
+                if (!cancelled) { setPreviewMarkdown(res.data.markdown); setPreviewEdited(res.data.markdown) }
+            } catch { if (!cancelled) { setPreviewMarkdown(""); setPreviewEdited("") } }
+        }
+        loadPdf()
+        loadPreview()
+        return () => { cancelled = true }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [analysis?.id])
 
     async function runDiff() {
         if (!diffFrom || !diffTo) return
@@ -1007,11 +1160,68 @@ function CandidateDetail({ candidate, onBack }) {
         } catch (err) { setError(getError(err)) }
     }
 
+    // "Done" converts the mentor's preview edits into a Suggested Edit for the candidate to
+    // review, and updates the mentor's own preview immediately - "Discard" drops only these
+    // preview edits, leaving any general feedback already sent untouched either way
+    async function doneEditing() {
+        if (!previewDirty) { setPreviewMode("original"); return }
+        try {
+            await api.post("/mentor/feedback", {
+                candidate_id: candidate.id,
+                analysis_id: analysis.id,
+                suggestion_key: `preview:${analysis.id}`,
+                feedback_type: "edit",
+                section: "Full Resume Preview",
+                original_text: previewMarkdown,
+                suggested_text: previewEdited,
+                comment: "Mentor-edited rewritten preview",
+            })
+            setPreviewMarkdown(previewEdited)
+            setPreviewDirty(false)
+            setPreviewMode("original")
+            toast("Suggested edits sent to candidate")
+            await load()
+        } catch (err) { setError(getError(err)) }
+    }
+
+    function discardEditing() {
+        setPreviewEdited(previewMarkdown)
+        setPreviewDirty(false)
+        setPreviewMode("original")
+    }
+
+    async function openMoreTab(tab) {
+        setMoreOpen(true)
+        setMoreTab(tab)
+        if (tab === "coverletters" && !coverLetters) {
+            try { setCoverLetters((await api.get(`/mentor/candidates/${candidate.id}/cover-letters`)).data) } catch (err) { setError(getError(err)) }
+        }
+    }
+
     const analyses = history?.analyses || []
     const rewrites = analysis?.results?.rewrites || {}
     const decisions = analysis?.results?.decisions || {}
+    const acceptedItems = Object.entries(rewrites).flatMap(([section, items]) => items.filter(it => decisions[it.id] === true).map(it => ({ ...it, section })))
 
-    return <section>
+    // Current vs Previous Feedback (item 18) - same split logic as the candidate's own inbox
+    const sentCurrentAttempt = sent.reduce((max, f) => Math.max(max, f.attempt_number || 0), 0)
+    const sentCurrent = sent.filter(f => f.attempt_number === sentCurrentAttempt)
+    const sentPrevious = sent.filter(f => f.attempt_number !== sentCurrentAttempt).sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+    function renderSentItem(f) {
+        return <div className={`card feedback-item ${f.status}`} key={f.id}>
+            <div className="feedback-meta">
+                <span className="fw-badge">{capitalize(f.feedback_type)}</span>
+                {f.section && <span className="status-chip">{f.section}</span>}
+                <span className={`status-chip status-${f.status}`}>{capitalize(f.status)}</span>
+                {f.attempt_number && <span className="feedback-attempt-meta">Attempt #{f.attempt_number} &bull; {formatShortDate(f.created_at)}</span>}
+            </div>
+            {f.feedback_type === "edit" && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Suggested</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
+            {f.comment && <p className="feedback-comment">{f.comment}</p>}
+        </div>
+    }
+
+    return <section className="mentor-workspace">
         <div className="detail-head">
             <button className="btn-secondary" onClick={onBack}>← All candidates</button>
             <h3 className="detail-title">{candidate.name}</h3>
@@ -1019,16 +1229,18 @@ function CandidateDetail({ candidate, onBack }) {
         {error && <p className="warning-strip">{error}</p>}
         <div className="two-col">
             <div>
-                <span className="section-label">Analysis History</span>
-                <div className="card mentor-table"><table><thead><tr><th>Date</th><th>Score</th><th>Model</th><th /></tr></thead><tbody>
-                    {analyses.map(a => <tr key={a.id}>
-                        <td>{String(a.created_at || "").slice(0, 16)}</td>
-                        <td style={{ color: getScoreCfg(a.score_total).color, fontWeight: 700 }}>{a.score_total}</td>
-                        <td>{a.provider}{a.model ? ` / ${a.model}` : ""}</td>
-                        <td><button className="btn-secondary btn-small" onClick={() => openAnalysis(a.id)}>Open</button></td>
-                    </tr>)}
-                    {!analyses.length && <tr><td colSpan={4} className="muted">No analyses yet.</td></tr>}
-                </tbody></table></div>
+                <details className="card" open={historyOpen} onToggle={e => setHistoryOpen(e.currentTarget.open)}>
+                    <summary>Analysis History {historyOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</summary>
+                    <table><thead><tr><th>Date</th><th>Score</th><th>Model</th><th /></tr></thead><tbody>
+                        {analyses.map(a => <tr key={a.id}>
+                            <td>{String(a.created_at || "").slice(0, 16)}</td>
+                            <td style={{ color: getScoreCfg(a.score_total).color, fontWeight: 700 }}>{a.score_total}</td>
+                            <td>{a.provider}{a.model ? ` / ${a.model}` : ""}</td>
+                            <td><button className="btn-secondary btn-small" onClick={() => openAnalysis(a.id)}>Open</button></td>
+                        </tr>)}
+                        {!analyses.length && <tr><td colSpan={4} className="muted">No analyses yet.</td></tr>}
+                    </tbody></table>
+                </details>
                 <span className="section-label">Compare Revisions</span>
                 <div className="card">
                     <div className="composer-row">
@@ -1043,16 +1255,14 @@ function CandidateDetail({ candidate, onBack }) {
                         <button className="btn-primary" onClick={runDiff} disabled={!diffFrom || !diffTo || diffFrom === diffTo}>Compare</button>
                     </div>
                 </div>
-                <FeedbackComposer candidateId={candidate.id} analysisId={analysis?.id} prefill={prefill} onSent={load} />
                 <span className="section-label">Feedback Sent</span>
                 <div className="feedback-list">
-                    {sent.map(f => <div className={`card feedback-item ${f.status}`} key={f.id}>
-                        <div className="feedback-meta"><span className="fw-badge">{f.feedback_type}</span>{f.section && <span className="status-chip">{f.section}</span>}<span className={`status-chip status-${f.status}`}>{f.status}</span><small className="muted">{String(f.created_at).slice(0, 16)}</small></div>
-                        {f.feedback_type === "edit" && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Suggested</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
-                        {f.comment && <p className="feedback-comment">{f.comment}</p>}
-                    </div>)}
-                    {!sent.length && <p className="muted">No feedback sent yet.</p>}
+                    {sentCurrent.length ? sentCurrent.map(renderSentItem) : <p className="muted">No feedback sent yet for the current attempt.</p>}
                 </div>
+                {sentPrevious.length > 0 && <details className="card previous-feedback">
+                    <summary>Previous Feedback ({sentPrevious.length})</summary>
+                    <div className="feedback-list">{sentPrevious.map(renderSentItem)}</div>
+                </details>}
             </div>
             <div>
                 {diff && <>
@@ -1066,21 +1276,90 @@ function CandidateDetail({ candidate, onBack }) {
                 </>}
                 {analysis && !diff && <>
                     <span className="section-label">Analysis #{analysis.id} · {analysis.score}/100 · {String(analysis.created_at).slice(0, 16)}</span>
-                    {Object.entries(rewrites).map(([section, items]) => <details className="card" key={section} open={section === "EXPERIENCE"}>
-                        <summary>{section}</summary>
-                        {items.filter(item => item.framework_used !== "none" && item.framework_used !== "error").map(item => <div className="mentor-suggestion" key={item.id}>
-                            <div className="feedback-meta">
-                                <span className={`severity-dot ${item.severity || "yellow"}`} />
-                                <span className={`status-chip ${decisions[item.id] === true ? "status-accepted" : decisions[item.id] === false ? "status-dismissed" : ""}`}>{decisions[item.id] === true ? "accepted" : decisions[item.id] === false ? "dismissed" : "undecided"}</span>
-                                <button className="btn-secondary btn-small" onClick={() => setPrefill({ type: "edit", section, original: item.original })}>Suggest edit</button>
+                    <div className="mentor-preview-toggle">
+                        <button className={previewMode === "original" ? "active" : ""} onClick={() => setPreviewMode("original")}>Original PDF</button>
+                        <button className={previewMode === "rewritten" ? "active" : ""} onClick={() => setPreviewMode("rewritten")}>Rewritten Preview</button>
+                    </div>
+                    {previewMode === "original" ? (
+                        pdfUrl ? <div className="pdf-shell"><iframe className="pdf-frame" src={pdfUrl} title="Candidate resume" /></div> : <div className="card muted">Source preview is available for PDF uploads only.</div>
+                    ) : <>
+                        <textarea className="input-field doc-editor mentor-preview-editor" value={previewEdited} onChange={e => { setPreviewEdited(e.target.value); setPreviewDirty(e.target.value !== previewMarkdown) }} />
+                        <article className="card markdown-preview doc-preview"><ReactMarkdown>{previewEdited}</ReactMarkdown></article>
+                        <div className="mentor-preview-actions">
+                            <button className="btn-primary" onClick={doneEditing} disabled={!previewDirty}><Check size={15} /> Done</button>
+                            <button className="btn-ghost" onClick={discardEditing} disabled={!previewDirty}>Discard Without Saving</button>
+                        </div>
+                    </>}
+
+                    <div className="mentor-more-row">
+                        <button className="btn-secondary btn-small" onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} More</button>
+                    </div>
+                    {moreOpen && <div className="card mentor-more-panel">
+                        <div className="mentor-more-tabs">
+                            <button className={moreTab === "analysis" ? "active" : ""} onClick={() => openMoreTab("analysis")}>Analysis</button>
+                            <button className={moreTab === "sections" ? "active" : ""} onClick={() => openMoreTab("sections")}>Extracted Sections</button>
+                            <button className={moreTab === "accepted" ? "active" : ""} onClick={() => openMoreTab("accepted")}>Accepted AI Suggestions</button>
+                            <button className={moreTab === "coverletters" ? "active" : ""} onClick={() => openMoreTab("coverletters")}>Cover Letters</button>
+                        </div>
+
+                        {moreTab === "analysis" && Object.entries(rewrites).map(([section, items]) => <details className="card" key={section} open={section === "EXPERIENCE"}>
+                            <summary>{section}</summary>
+                            {items.filter(item => item.framework_used !== "none" && item.framework_used !== "error").map(item => <div className="mentor-suggestion" key={item.id}>
+                                <div className="feedback-meta">
+                                    <span className={`severity-dot ${item.severity || "yellow"}`} />
+                                    <span className={`status-chip ${decisions[item.id] === true ? "status-accepted" : decisions[item.id] === false ? "status-dismissed" : ""}`}>{decisions[item.id] === true ? "Accepted" : decisions[item.id] === false ? "Dismissed" : "Undecided"}</span>
+                                    <button className="pill suggest-edit-pill" onClick={() => setActiveComposerKey(activeComposerKey === item.id ? null : item.id)}><PenSquare size={12} /> Suggest Edit</button>
+                                </div>
+                                <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">AI rewrite</span><p className="rewrite-text">{item.rewritten}</p></div></div>
+                                {activeComposerKey === item.id && <FeedbackComposer
+                                    candidateId={candidate.id} analysisId={analysis.id}
+                                    prefill={{ type: "edit", section, original: item.original, key: item.id }}
+                                    onSent={(text) => {
+                                        setActiveComposerKey(null)
+                                        load()
+                                        if (text) setPreviewEdited(prev => prev.includes(item.rewritten) ? prev.replace(item.rewritten, text) : prev.includes(item.original) ? prev.replace(item.original, text) : prev)
+                                    }}
+                                />}
+                            </div>)}
+                        </details>)}
+
+                        {moreTab === "sections" && Object.entries(analysis.results?.sections || {}).map(([name, lines]) => (
+                            <details className="card" key={name} open={name === "EXPERIENCE"}><summary>{name}</summary><pre className="section-pre">{lines.join("\n")}</pre></details>
+                        ))}
+
+                        {moreTab === "accepted" && (acceptedItems.length ? acceptedItems.map(item => (
+                            <div className="card mentor-suggestion" key={item.id}>
+                                <span className="status-chip">{item.section}</span>
+                                <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">Accepted rewrite</span><p className="rewrite-text">{item.rewritten}</p></div></div>
                             </div>
-                            <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">AI rewrite</span><p className="rewrite-text">{item.rewritten}</p></div></div>
-                        </div>)}
-                    </details>)}
+                        )) : <p className="muted">No suggestions accepted yet.</p>)}
+
+                        {moreTab === "coverletters" && (coverLetters == null ? <p className="muted">Loading…</p> : coverLetters.length ? coverLetters.map(cl => (
+                            <div className="card" key={cl.id}>
+                                <div className="feedback-meta">
+                                    <span className="fw-badge"><Building2 size={12} /> {cl.company || "Company not detected"}</span>
+                                    <span className="status-chip">Attempt #{cl.attempt_number || "—"}</span>
+                                    <small className="muted">{formatShortDate(cl.created_at)}</small>
+                                </div>
+                                <pre className="section-pre">{cl.content}</pre>
+                            </div>
+                        )) : <p className="muted">No cover letters generated yet.</p>)}
+                    </div>}
                 </>}
                 {!analysis && !diff && <div className="card muted">Open an analysis or compare two revisions to see details here.</div>}
             </div>
         </div>
+
+        <button className="mentor-compose-fab" onClick={() => setComposeOpen(true)} title="Compose general feedback"><PenSquare size={20} /></button>
+        {composeOpen && createPortal(<div className="modal-overlay" onClick={() => setComposeOpen(false)}>
+            <div className="modal-panel" onClick={e => e.stopPropagation()}>
+                <div className="modal-head">
+                    <h3 className="modal-title">General Feedback</h3>
+                    <button className="btn-ghost modal-close" onClick={() => setComposeOpen(false)} title="Close"><X size={18} /></button>
+                </div>
+                <FeedbackComposer candidateId={candidate.id} analysisId={analysis?.id} prefill={null} onSent={() => { load(); setComposeOpen(false) }} />
+            </div>
+        </div>, document.body)}
     </section>
 }
 
@@ -1103,6 +1382,13 @@ function MentorDashboard() {
         } catch (err) { setError(getError(err)) }
     }
 
+    async function deactivate(code) {
+        try {
+            await api.post(`/mentor/session/${code}/close`)
+            await load()
+        } catch (err) { setError(getError(err)) }
+    }
+
     if (error) return <p className="warning-strip">{error}</p>
     if (!data) return <p className="muted">Loading mentor dashboard...</p>
     if (openCandidate) return <CandidateDetail candidate={openCandidate} onBack={() => setOpenCandidate(null)} />
@@ -1114,7 +1400,12 @@ function MentorDashboard() {
         </div>
         {newCode && <p className="success-msg">Session created — share code <b>{newCode}</b> with your candidates.</p>}
         <div className="card"><span className="section-label">Sessions</span>
-            {data.sessions.length ? data.sessions.map(session => <p className="session-row" key={session.id}><b className="session-code">{session.session_code}</b><span className={`status-chip ${session.active ? "status-accepted" : ""}`}>{session.active ? "active" : "closed"}</span><span className="muted">{session.participants.filter(p => p.role === "candidate").map(item => item.display_name).join(", ") || "No participants yet"}</span></p>) : <p className="muted">No sessions yet — create one and share the code.</p>}
+            {data.sessions.length ? data.sessions.map(session => <p className="session-row" key={session.id}>
+                <b className="session-code">{session.session_code}</b>
+                <span className={`status-chip ${session.active ? "status-accepted" : ""}`}>{session.active ? "Active" : "Closed"}</span>
+                <span className="muted">{session.participants.filter(p => p.role === "candidate").map(item => item.display_name).join(", ") || "No participants yet"}</span>
+                {session.active && <button className="btn-destructive btn-small session-deactivate" onClick={() => deactivate(session.session_code)}><Ban size={13} /> Deactivate</button>}
+            </p>) : <p className="muted">No sessions yet — create one and share the code.</p>}
         </div>
         <span className="section-label">Candidates</span>
         <div className="card mentor-table"><table><thead><tr><th>Candidate</th><th>Analyses</th><th>Latest</th><th>Best</th><th /></tr></thead><tbody>
@@ -1128,6 +1419,17 @@ function MentorDashboard() {
             {!data.candidates.length && <tr><td colSpan={5} className="muted">No candidates have joined a session yet.</td></tr>}
         </tbody></table></div>
     </section>
+}
+
+function capitalize(s) {
+    return s ? s[0].toUpperCase() + s.slice(1) : s
+}
+
+function formatShortDate(value) {
+    if (!value) return ""
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return ""
+    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
 }
 
 function FeedbackInbox() {
@@ -1150,63 +1452,165 @@ function FeedbackInbox() {
     if (!items) return <p className="muted">Loading feedback...</p>
     if (!items.length) return <div className="card muted">No mentor feedback yet. Join a review session from the sidebar, and your mentor's comments and suggested edits will appear here.</div>
 
+    // "current attempt" = the most recent attempt that has any feedback attached to it;
+    // everything from an older attempt, or already dismissed, moves into Previous Feedback
+    const currentAttempt = items.reduce((max, f) => Math.max(max, f.attempt_number || 0), 0)
+    const current = items.filter(f => f.status !== "dismissed" && f.attempt_number === currentAttempt)
+    const previous = items
+        .filter(f => f.status === "dismissed" || f.attempt_number !== currentAttempt)
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+    function renderItem(f) {
+        return <div className={`card feedback-item ${f.status}`} key={f.id}>
+            <div className="feedback-meta">
+                <b>{f.mentor_name}</b>
+                <span className="fw-badge">{capitalize(f.feedback_type)}</span>
+                {f.section && <span className="status-chip">{f.section}</span>}
+                <span className={`status-chip status-${f.status}`}>{capitalize(f.status)}</span>
+                {f.attempt_number && <span className="feedback-attempt-meta">Attempt #{f.attempt_number} &bull; {formatShortDate(f.created_at)}</span>}
+            </div>
+            {f.feedback_type === "edit" && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Mentor's suggestion</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
+            {f.comment && <p className="feedback-comment">{f.comment}</p>}
+            {f.status === "open" && <div className="composer-actions">
+                <button className="btn-primary" onClick={() => setStatus(f.id, "accepted")}><Check size={15} /> Accept</button>
+                <button className="btn-ghost" onClick={() => setStatus(f.id, "dismissed")}><X size={14} /> Dismiss</button>
+            </div>}
+        </div>
+    }
+
     return <section>
         <h2 className="view-title">Mentor Feedback</h2>
         <div className="feedback-list">
-            {items.map(f => <div className={`card feedback-item ${f.status}`} key={f.id}>
-                <div className="feedback-meta">
-                    <b>{f.mentor_name}</b>
-                    <span className="fw-badge">{f.feedback_type}</span>
-                    {f.section && <span className="status-chip">{f.section}</span>}
-                    <span className={`status-chip status-${f.status}`}>{f.status}</span>
-                    <small className="muted">{String(f.created_at).slice(0, 16)}</small>
-                </div>
-                {f.feedback_type === "edit" && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Mentor's suggestion</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
-                {f.comment && <p className="feedback-comment">{f.comment}</p>}
-                {f.status === "open" && <div className="composer-actions">
-                    <button className="btn-primary" onClick={() => setStatus(f.id, "accepted")}><Check size={15} /> Accept</button>
-                    <button className="btn-ghost" onClick={() => setStatus(f.id, "dismissed")}><X size={14} /> Dismiss</button>
-                </div>}
-            </div>)}
+            {current.length ? current.map(renderItem) : <p className="muted">No feedback yet for your current attempt.</p>}
         </div>
+        {previous.length > 0 && <details className="card previous-feedback">
+            <summary>Previous Feedback ({previous.length})</summary>
+            <div className="feedback-list">{previous.map(renderItem)}</div>
+        </details>}
     </section>
 }
 
-function JobMatching({ result, provider, localEndpoint }) {
-    const [url, setUrl] = useState("")
-    const [scraped, setScraped] = useState("")
-    const [jobId, setJobId] = useState(null)
-    const [comparison, setComparison] = useState(null)
-    const [linkedinUrl, setLinkedinUrl] = useState("")
-    const [linkedinProfile, setLinkedinProfile] = useState(null)
+// a lightweight client-side echo of analyser.py's kw_freqs - the compare-resume-jd endpoint
+// doesn't return per-keyword counts, so this derives real ones from the resume text rather
+// than showing a fabricated or blank count next to every "present" keyword
+function computeKeywordFrequencies(keywords, text) {
+    const lower = (text || "").toLowerCase()
+    const freqs = {}
+    for (const kw of keywords) {
+        const escaped = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        const matches = lower.match(new RegExp(`\\b${escaped}\\b`, "g"))
+        if (matches) freqs[kw] = matches.length
+    }
+    return freqs
+}
+
+function JobMatching({ result, provider, localEndpoint, jobMatchState, setJobMatchState, onReanalyse, onGenerateCV, onGenerateCoverLetter, analysing, busyAction }) {
+    const { url, scraped, jobId, comparison, linkedinUrl, linkedinProfile, company } = jobMatchState
+    const [compareBusy, setCompareBusy] = useState(false)
+    const [scrapeBusy, setScrapeBusy] = useState(false)
+    const [linkedinBusy, setLinkedinBusy] = useState(false)
     const [error, setError] = useState("")
+
+    function patch(fields) { setJobMatchState(prev => ({ ...prev, ...fields })) }
+
     async function scrape() {
+        setScrapeBusy(true)
+        setError("")
         try {
             const res = await api.post("/scrape/jd", { url })
-            setScraped(res.data.text || "")
-            setJobId(res.data.job_id || null)
-        } catch (err) { setError(getError(err)) }
+            patch({ scraped: res.data.text || "", jobId: res.data.job_id || null })
+        } catch (err) { setError(getError(err)) } finally { setScrapeBusy(false) }
     }
+
     async function compare() {
         setError("")
+        setCompareBusy(true)
         try {
             const res = await api.post("/scrape/compare", { resume_text: result.raw_text || "", jd_text: scraped || result.job_description || "", provider, local_endpoint: localEndpoint, job_id: jobId, analysis_id: result.analysis_id })
             if (res.data.error) {
                 setError(`Comparison failed: ${res.data.error}`)
-                setComparison(null)
+                patch({ comparison: null })
             } else {
-                setComparison(res.data)
+                patch({ comparison: res.data, company: res.data.company || "" })
             }
-        } catch (err) { setError(getError(err)) }
+        } catch (err) { setError(getError(err)) } finally { setCompareBusy(false) }
     }
+
     async function scrapeLinkedIn() {
+        setLinkedinBusy(true)
+        setError("")
         try {
             const res = await api.post("/scrape/linkedin", { url: linkedinUrl })
-            setLinkedinProfile(res.data.profile || res.data)
-        } catch (err) { setError(getError(err)) }
+            patch({ linkedinProfile: res.data.profile || res.data })
+        } catch (err) { setError(getError(err)) } finally { setLinkedinBusy(false) }
     }
+
     const profileError = linkedinProfile?.error
-    return <section><h2 className="view-title">Job Matching</h2><span className="section-label">Recruitment Integration</span><div className="scrape-row"><input className="input-field" value={url} onChange={e => setUrl(e.target.value)} placeholder="Enter Job Description URL" /><button className="btn-primary" onClick={scrape}>Scrape</button></div>{scraped && <textarea className="input-field document-editor" value={scraped} onChange={e => setScraped(e.target.value)} />}{error && <p className="error-msg">{error}</p>}<button className="btn-secondary btn-block-gap" onClick={compare} disabled={!scraped && !result.job_description}>Compare Resume to Job</button>{comparison && <div className="card"><p className="metric-value">{comparison.match_pct || 0}%</p><p><b>Strong matches:</b> {(comparison.strong_matches || []).join(", ") || "None"}</p><p><b>Missing skills:</b> {(comparison.missing_skills || []).join(", ") || "None"}</p><p><b>Tailoring tips:</b> {(comparison.tailoring_tips || []).join(" · ") || "None"}</p></div>}<hr className="slim-divider" /><h3 className="doc-subhead">LinkedIn Profile Import</h3><p className="muted">The reliable path is LinkedIn's own data export: Settings → Data privacy → Get a copy of your data → ZIP, then upload that ZIP in the main upload box. Public URL preview below is limited by LinkedIn's sign-in wall.</p><div className="scrape-row"><input className="input-field" value={linkedinUrl} onChange={e => setLinkedinUrl(e.target.value)} placeholder="LinkedIn Profile URL (public preview only)" /><button className="btn-secondary" onClick={scrapeLinkedIn}>Preview Profile</button></div>{linkedinProfile && (profileError ? <p className="warning-strip">{profileError}</p> : <div className="card">{linkedinProfile.name && <p><b>{linkedinProfile.name}</b></p>}{linkedinProfile.headline && <p>{linkedinProfile.headline}</p>}{linkedinProfile.note && <p className="muted">{linkedinProfile.note}</p>}</div>)}</section>
+    const activeJD = scraped || result.job_description || ""
+    const anyShortcutBusy = analysing || busyAction !== ""
+    const matchedKeywordResult = comparison ? {
+        jd_keywords: [...(comparison.strong_matches || []), ...(comparison.missing_skills || [])],
+        missing_keywords: comparison.missing_skills || [],
+        keyword_frequencies: computeKeywordFrequencies(comparison.strong_matches || [], result.raw_text),
+    } : null
+
+    return <section className="job-matching-page">
+        <h2 className="view-title">Job Matching</h2>
+        <span className="section-label">Recruitment Integration</span>
+        <div className="scrape-row">
+            <input className="input-field" value={url} onChange={e => patch({ url: e.target.value })} placeholder="Enter Job Description URL" />
+            <button className="job-match-action" onClick={scrape} disabled={scrapeBusy}>{scrapeBusy ? <><span className="spinner" />Scraping…</> : "Scrape"}</button>
+        </div>
+        {scraped && <textarea className="input-field document-editor" value={scraped} onChange={e => patch({ scraped: e.target.value })} />}
+        {error && <p className="error-msg">{error}</p>}
+
+        <button className="job-match-action job-match-compare" onClick={compare} disabled={compareBusy || (!scraped && !result.job_description)}>
+            {compareBusy ? <><span className="spinner" />Comparing…</> : "Compare Resume to Job"}
+        </button>
+
+        {comparison && <div className="job-match-results">
+            <div className="card job-match-score-card">
+                <span className="section-label">Compatibility Score</span>
+                <p className="metric-value">{comparison.match_pct || 0}%</p>
+                <p><b>Strong matches:</b> {(comparison.strong_matches || []).join(", ") || "None"}</p>
+                <p><b>Missing skills:</b> {(comparison.missing_skills || []).join(", ") || "None"}</p>
+                <p><b>Tailoring tips:</b> {(comparison.tailoring_tips || []).join(" · ") || "None"}</p>
+                {company && <p className="job-match-company"><Building2 size={13} /> {company}</p>}
+            </div>
+
+            <h3 className="doc-subhead">Matched Keyword Gap</h3>
+            <KeywordGap result={matchedKeywordResult} />
+
+            <div className="job-match-shortcuts">
+                <button className="job-match-action" onClick={() => onReanalyse(activeJD)} disabled={anyShortcutBusy}>
+                    {analysing ? <><span className="spinner" />Reanalysing…</> : <><RotateCw size={15} /> Reanalyse Resume</>}
+                </button>
+                <button className="job-match-action" onClick={() => onGenerateCV(activeJD)} disabled={anyShortcutBusy}>
+                    {busyAction === "cv" ? <><span className="spinner" />Generating…</> : <><FileEdit size={15} /> Generate Tailored CV</>}
+                </button>
+                <button className="job-match-action" onClick={() => onGenerateCoverLetter(activeJD)} disabled={anyShortcutBusy}>
+                    {busyAction === "cover-letter" ? <><span className="spinner" />Generating…</> : <><Mail size={15} /> Generate Cover Letter</>}
+                </button>
+            </div>
+        </div>}
+
+        <hr className="slim-divider" />
+        <h3 className="doc-subhead">LinkedIn Profile Import</h3>
+        <p className="muted">The reliable path is LinkedIn's own data export: Settings → Data privacy → Get a copy of your data → ZIP, then upload that ZIP in the main upload box. Public URL preview below is limited by LinkedIn's sign-in wall.</p>
+        <div className="scrape-row">
+            <input className="input-field" value={linkedinUrl} onChange={e => patch({ linkedinUrl: e.target.value })} placeholder="LinkedIn Profile URL (public preview only)" />
+            <button className="btn-secondary" onClick={scrapeLinkedIn} disabled={linkedinBusy}>{linkedinBusy ? <><span className="spinner" />Loading…</> : "Preview Profile"}</button>
+        </div>
+        {linkedinProfile && (profileError ? <p className="warning-strip">{profileError}</p> : <div className="card">{linkedinProfile.name && <p><b>{linkedinProfile.name}</b></p>}{linkedinProfile.headline && <p>{linkedinProfile.headline}</p>}{linkedinProfile.note && <p className="muted">{linkedinProfile.note}</p>}</div>)}
+    </section>
+}
+
+// SIDEBAR_KEY: once the user manually re-expands the sidebar after an auto-collapse, that
+// choice is remembered forever (across reloads) so auto-collapse never fights them again
+const SIDEBAR_AUTO_COLLAPSE_DISABLED_KEY = "rtr_sidebar_auto_collapse_disabled"
+
+function toFilenamePart(s) {
+    return String(s || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "DOCUMENT"
 }
 
 function App() {
@@ -1229,11 +1633,21 @@ function App() {
     const [error, setError] = useState("")
     const [history, setHistory] = useState([])
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+    const [autoCollapseDisabled, setAutoCollapseDisabled] = useState(() => localStorage.getItem(SIDEBAR_AUTO_COLLAPSE_DISABLED_KEY) === "true")
+    const [navHidden, setNavHidden] = useState(false)
     const [exported, setExported] = useState(false)
     const [setupExpanded, setSetupExpanded] = useState(true)
+    // Job Matching's own scrape/compare state, lifted up here (rather than kept local to
+    // <JobMatching>) so switching tabs away and back never re-runs the scrape or comparison -
+    // the tab body unmounts on every view switch, but this state doesn't live there anymore
+    const [jobMatchState, setJobMatchState] = useState({ url: "", scraped: "", jobId: null, comparison: null, linkedinUrl: "", linkedinProfile: null, company: "" })
+    const [jobMatchBusyAction, setJobMatchBusyAction] = useState("")
+    const hasAutoCollapsedRef = useRef(false)
+    const navScrollAnchorRef = useRef(0)
     const providerMeta = PROVIDER_OPTIONS.find(p => p.key === provider)
     const visibleProviders = PROVIDER_OPTIONS.filter(p => p.key !== "local" || status.localAllowed)
     const needsKey = providerMeta?.byok && status[provider] === false
+    const fullName = result?.parsed_resume?.contact?.name || result?.contact?.name || ""
 
     function refreshStatus() {
         return api.get("/settings/env-status").then(res => setStatus(res.data)).catch(() => setStatus({}))
@@ -1245,17 +1659,75 @@ function App() {
         api.get("/analysis/history").then(res => setHistory(res.data)).catch(() => setHistory([]))
     }, [user])
 
-    // collapse the sidebar to icon-only once the user scrolls into the results, so it stops
-    // competing for space with the workspace - it never re-expands on its own, only via the
-    // toggle button, so it doesn't fight a deliberate click by re-collapsing on the next tick
+    // the browser auto-scrolls the page to bring a focused field into view (e.g. clicking/
+    // filling a form field near the bottom of the sidebar) - that scroll isn't the user
+    // deliberately reading down the page, so both scroll-driven UI behaviors below ignore
+    // scroll events that land within a short window of any input/textarea/select gaining focus
+    const recentFieldFocusRef = useRef(false)
     useEffect(() => {
-        if (!result) return undefined
+        let timer = null
+        function onFocusIn(e) {
+            const tag = (e.target.tagName || "").toLowerCase()
+            if (tag !== "input" && tag !== "textarea" && tag !== "select") return
+            recentFieldFocusRef.current = true
+            clearTimeout(timer)
+            timer = setTimeout(() => { recentFieldFocusRef.current = false }, 600)
+        }
+        window.addEventListener("focusin", onFocusIn)
+        return () => { window.removeEventListener("focusin", onFocusIn); clearTimeout(timer) }
+    }, [])
+
+    // collapse the sidebar to icon-only the FIRST time the user scrolls into the results, so
+    // it stops competing for space with the workspace - but only ever once automatically.
+    // Manually re-expanding afterward (see toggleSidebar) permanently retires this listener.
+    useEffect(() => {
+        if (!result || autoCollapseDisabled) return undefined
         function onScroll() {
-            if (window.scrollY > 140) setSidebarCollapsed(true)
+            if (recentFieldFocusRef.current) return
+            if (!hasAutoCollapsedRef.current && window.scrollY > 140) {
+                hasAutoCollapsedRef.current = true
+                setSidebarCollapsed(true)
+            }
         }
         window.addEventListener("scroll", onScroll, { passive: true })
         return () => window.removeEventListener("scroll", onScroll)
-    }, [result])
+    }, [result, autoCollapseDisabled])
+
+    // the nav bar never floats over content: scrolling down more than ~20% of the viewport
+    // collapses it to a floating expand button (matching the sidebar's collapsed toggle);
+    // scrolling back up more than ~20% restores it. Measured relative to the scroll position
+    // where the nav last changed state, not an absolute page offset.
+    useEffect(() => {
+        if (!result) return undefined
+        function onScroll() {
+            if (recentFieldFocusRef.current) return
+            const y = window.scrollY
+            const threshold = window.innerHeight * 0.2
+            const delta = y - navScrollAnchorRef.current
+            if (!navHidden && y > threshold && delta > threshold) {
+                setNavHidden(true)
+                navScrollAnchorRef.current = y
+            } else if (navHidden && delta < -threshold) {
+                setNavHidden(false)
+                navScrollAnchorRef.current = y
+            }
+        }
+        window.addEventListener("scroll", onScroll, { passive: true })
+        return () => window.removeEventListener("scroll", onScroll)
+    }, [result, navHidden])
+
+    function toggleSidebar() {
+        setSidebarCollapsed(prev => {
+            const next = !prev
+            // manually EXPANDING (not collapsing) is the signal that the user wants control -
+            // from then on auto-collapse-on-scroll never fires again, even after a reload
+            if (prev && !next && !autoCollapseDisabled) {
+                setAutoCollapseDisabled(true)
+                localStorage.setItem(SIDEBAR_AUTO_COLLAPSE_DISABLED_KEY, "true")
+            }
+            return next
+        })
+    }
 
     useEffect(() => {
         setResult(null)
@@ -1284,8 +1756,11 @@ function App() {
         } catch (err) { setKeyMessage(getError(err)) } finally { setKeyBusy(false) }
     }
 
-    async function analyse() {
+    // jdOverride lets "Reanalyse Resume" on the Job Matching page rerun the full analysis
+    // using the scraped job description as the active JD, without the user re-pasting it
+    async function analyse(jdOverride) {
         if (!file) return
+        const jd = jdOverride !== undefined ? jdOverride : jobDescription
         setBusy(true)
         setError("")
         try {
@@ -1295,19 +1770,21 @@ function App() {
             const run = await api.post("/analysis/run", {
                 resume_id: upload.data.resume_id,
                 resume_json: upload.data.parsed,
-                job_description: jobDescription,
+                job_description: jd,
                 provider,
                 use_critic: useCritic,
                 local_endpoint: provider === "local" ? localEndpoint : "",
             })
             const completed = await waitForAnalysis(run.data.job_id)
-            setResult({ ...completed, parsed_resume: upload.data.parsed, job_description: jobDescription, raw_text: upload.data.parsed.raw_text })
+            setResult({ ...completed, parsed_resume: upload.data.parsed, job_description: jd, raw_text: upload.data.parsed.raw_text })
             setAnalysisId(completed.analysis_id)
             setDecisions({})
             setView("Suggestions")
             setSidebarCollapsed(false)
             setSetupExpanded(false)
             setExported(false)
+            setJobDescription(jd)
+            hasAutoCollapsedRef.current = false
             // restore any docs already generated for this analysis so tabs don't wipe them
             try {
                 const docsRes = await api.get(`/generate/latest?analysis_id=${completed.analysis_id}`)
@@ -1321,6 +1798,38 @@ function App() {
         } catch (err) { setError(getError(err)) } finally { setBusy(false) }
     }
 
+    // triggered from Job Matching's "Generate Tailored CV"/"Generate Cover Letter" shortcuts -
+    // launches generation directly using the scraped job description, switching to the
+    // relevant tab to show the result, without requiring the user to navigate there first
+    async function generateFromJobMatch(type, jdText) {
+        setView(type === "cv" ? "Tailored CV" : "Cover Letter")
+        setJobMatchBusyAction(type)
+        try {
+            const endpoint = type === "cv" ? "/generate/cv" : "/generate/cover-letter"
+            const payload = {
+                resume_json: result.parsed_resume,
+                job_description: jdText,
+                provider, local_endpoint: localEndpoint,
+                analysis_id: analysisId || result.analysis_id,
+            }
+            if (type === "cv") {
+                payload.rewrite_suggestions = result.rewrites
+                payload.rewrite_decisions = decisions
+                payload.acc_map = {}
+            } else if (jobMatchState.company) {
+                payload.company = jobMatchState.company
+            }
+            const res = await api.post(endpoint, payload)
+            const text = type === "cv" ? res.data.cv_text : res.data.cover_letter_text
+            setDocs(prev => ({ ...prev, [type === "cv" ? "cv" : "cover_letter"]: text }))
+            toast(`${type === "cv" ? "Tailored CV" : "Cover letter"} generated from Job Matching`)
+        } catch (err) {
+            toast(getError(err), "error")
+        } finally {
+            setJobMatchBusyAction("")
+        }
+    }
+
     if (!user) return <AuthPage />
     const isMentor = user.role === "mentor"
 
@@ -1328,6 +1837,7 @@ function App() {
     if (isMentor) {
         return <main className="app-container">
             <ToastHost />
+            <AuthBar user={user} onLogout={logout} />
             <Hero />
             <div className="topbar">
                 <span className="muted">Signed in as <b>{user.display_name}</b> · mentor</span>
@@ -1339,6 +1849,7 @@ function App() {
 
     return <main className="app-container">
         <ToastHost />
+        <AuthBar user={user} onLogout={logout} />
         <Hero />
         <PipelineStepper file={file} busy={busy} result={result} docs={docs} exported={exported} />
         {result && !setupExpanded ? (
@@ -1384,19 +1895,27 @@ function App() {
         {error && <p className="warning-strip">{error}</p>}
         {!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
         {result && <>
-            <TopNav view={view} setView={setView} />
+            <TopNav view={view} setView={setView} hidden={navHidden} onShow={() => { setNavHidden(false); navScrollAnchorRef.current = window.scrollY }} />
             <div className={`workspace ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
-            <ResultsSidebar result={result} user={user} onLogout={logout} history={history} collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)} />
+            <ResultsSidebar result={result} user={user} onLogout={logout} history={history} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
             <div className="workspace-main">
                 <div className="fade-in" key={view}>
                     {view === "Suggestions" && <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />}
                     {view === "Keyword Gap" && <KeywordGap result={result} />}
                     {view === "Extracted Sections" && <ExtractedSections result={result} />}
-                    {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} />}
-                    {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} />}
+                    {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} fullName={fullName} />}
+                    {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} />}
                     {view === "Mentor Feedback" && <FeedbackInbox />}
-                    {view === "Analytics" && <Analytics result={result} history={history} decisions={decisions} />}
-                    {view === "Job Matching" && <JobMatching result={result} provider={provider} localEndpoint={localEndpoint} />}
+                    {view === "Insights" && <Analytics result={result} history={history} decisions={decisions} />}
+                    {view === "Job Matching" && <JobMatching
+                        result={result} provider={provider} localEndpoint={localEndpoint}
+                        jobMatchState={jobMatchState} setJobMatchState={setJobMatchState}
+                        onReanalyse={jd => analyse(jd)}
+                        onGenerateCV={jd => generateFromJobMatch("cv", jd)}
+                        onGenerateCoverLetter={jd => generateFromJobMatch("cover-letter", jd)}
+                        analysing={busy}
+                        busyAction={jobMatchBusyAction}
+                    />}
                 </div>
             </div>
             </div>

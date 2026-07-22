@@ -40,6 +40,20 @@ function buildEnginePayload(req, res, extraFields) {
     }
 }
 
+// bullets where the candidate accepted a mentor's suggested rewrite (an "edit"-type
+// mentor_feedback row keyed to that bullet's suggestion_key) must win over the LLM's
+// own rewrite in the generated CV - this is the candidate's own explicit decision,
+// not the mentor's unilateral override, since it only applies once status='accepted'
+function mentorOverridesFor(analysisId, candidateId) {
+    if (!analysisId) return {}
+    const rows = getDb().prepare(`
+        SELECT suggestion_key, suggested_text FROM mentor_feedback
+        WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'edit'
+          AND status = 'accepted' AND suggestion_key != ''
+    `).all(analysisId, candidateId)
+    return Object.fromEntries(rows.map(r => [r.suggestion_key, r.suggested_text]))
+}
+
 router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
@@ -48,6 +62,7 @@ router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
         acc_map: req.body.acc_map || {},
         rewrite_suggestions: req.body.rewrite_suggestions || null,
         rewrite_decisions: req.body.rewrite_decisions || null,
+        mentor_overrides: mentorOverridesFor(req.body.analysis_id, req.user.id),
     })
     if (!enginePayload) return
 
@@ -89,8 +104,8 @@ router.post("/cover-letter", llmLimiter, authenticateToken, async (req, res) => 
         const data = await engineRes.json()
         if (req.body.analysis_id) {
             getDb().prepare(
-                "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
-            ).run(req.body.analysis_id, req.user.id, "cover_letter", data.cover_letter_text || "")
+                "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+            ).run(req.body.analysis_id, req.user.id, "cover_letter", data.cover_letter_text || "", String(req.body.company || "").slice(0, 200))
         }
         res.json(data)
     } catch (err) {

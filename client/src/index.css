@@ -26,9 +26,10 @@
     --text-body: 1rem;             /* 16px */
     --text-caption: 0.8125rem;     /* 13px */
 
-    /* restrained color system */
-    --c-primary: #8b5cf6;
-    --c-primary-dark: #7c3aed;
+    /* restrained color system - primary is the EXACT purple used by the hero's accent
+       text (.hero-title .accent), so every primary button matches it precisely */
+    --c-primary: #a78bfa;
+    --c-primary-dark: #8b5cf6;
     --c-teal: #15C39A;
     --c-text: #0D0F11;
     --c-text-muted: #64748b;
@@ -44,6 +45,10 @@
 
     --radius: 12px;
     --radius-lg: 16px;
+    /* shared radius for every button variant - slightly larger than the old 10-12px mix,
+       and identical across primary/secondary/ghost/destructive/dark/outline so only color
+       and weight signal emphasis, never shape */
+    --radius-btn: 14px;
     --shadow-sm: 0 1px 2px rgba(15,23,42,0.05);
     --shadow-md: 0 4px 16px rgba(15,23,42,0.08);
 }
@@ -358,39 +363,54 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    background: linear-gradient(135deg, var(--c-primary), var(--c-primary-dark));
     color: #f8f8f2;
-    border: 1px solid rgba(139, 92, 246, 0.35);
-    border-radius: var(--radius);
-    padding: 0.65rem 1.5rem;
+    border: 1px solid rgba(167, 139, 250, 0.4);
+    border-radius: var(--radius-btn);
+    padding: 0.6rem 1.4rem;
     font-family: var(--font-ui);
     font-weight: 700;
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     cursor: pointer;
-    box-shadow: 0 6px 18px rgba(124, 58, 237, 0.22);
+    box-shadow: 0 6px 18px rgba(167, 139, 250, 0.25);
     transition: all 0.18s ease;
     white-space: nowrap;
 }
 .btn-primary:hover {
-    background: linear-gradient(135deg, #7c3aed, #6d28d9);
-    border-color: rgba(139, 92, 246, 0.55);
+    background: linear-gradient(135deg, var(--c-primary-dark), #7c3aed);
+    border-color: rgba(139, 92, 246, 0.6);
     transform: translateY(-1px);
-    box-shadow: 0 8px 22px rgba(124, 58, 237, 0.28);
+    box-shadow: 0 8px 22px rgba(139, 92, 246, 0.3);
 }
 .btn-primary:active { transform: translateY(0); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 .btn-primary.full-width { width: 100%; }
 
+.btn-outline-primary {
+    background: transparent;
+    border: 1.5px solid var(--c-primary);
+    border-radius: var(--radius-btn);
+    padding: 0.6rem 1.4rem;
+    font-family: var(--font-ui);
+    font-weight: 700;
+    font-size: 0.88rem;
+    color: var(--c-primary-dark);
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.btn-outline-primary:hover { background: rgba(167, 139, 250, 0.1); }
+.btn-outline-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .btn-dark {
-    border-radius: 10px;
+    border-radius: var(--radius-btn);
     background: #0D0F11;
     color: #FFFFFF;
     border: none;
     box-shadow: 0 2px 8px rgba(13,15,17,0.2);
     font-weight: 700;
-    padding: 0.6rem 1.2rem;
+    padding: 0.6rem 1.4rem;
     font-family: var(--font-ui);
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     cursor: pointer;
     transition: all 0.2s ease;
 }
@@ -399,16 +419,17 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
 .btn-secondary {
     background: #FFFFFF;
     border: 1px solid #E8EAED;
-    border-radius: 10px;
-    padding: 0.55rem 1.2rem;
+    border-radius: var(--radius-btn);
+    padding: 0.6rem 1.4rem;
     font-family: var(--font-ui);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     color: #0D0F11;
     cursor: pointer;
     transition: all 0.15s;
 }
 .btn-secondary:hover { background: #F7F8FA; border-color: #15C39A; }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .nav-bar {
     background: linear-gradient(135deg, #0a0a0f 0%, #111827 45%, #172554 100%);
@@ -472,8 +493,9 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
 .input-field:focus { border-color: #15C39A; }
 
 .btn-primary:focus-visible, .btn-secondary:focus-visible, .btn-dark:focus-visible,
+.btn-ghost:focus-visible, .btn-destructive:focus-visible, .btn-outline-primary:focus-visible,
 .nav-pill:focus-visible, .input-field:focus-visible {
-    outline: 2px solid #8b5cf6;
+    outline: 2px solid var(--c-primary);
     outline-offset: 2px;
 }
 
@@ -861,17 +883,17 @@ details.card > summary {
 .export-row .btn-dark { flex: 0 0 auto; }
 
 /* ---- button hierarchy: ghost (low-emphasis) + destructive tiers ---- */
-.btn-primary, .btn-secondary, .btn-ghost, .btn-destructive, .btn-dark {
+.btn-primary, .btn-secondary, .btn-ghost, .btn-destructive, .btn-dark, .btn-outline-primary {
     display: inline-flex; align-items: center; gap: 0.4rem; justify-content: center;
 }
 .btn-ghost {
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 10px;
-    padding: 0.55rem 1.1rem;
+    border-radius: var(--radius-btn);
+    padding: 0.6rem 1.4rem;
     font-family: var(--font-ui);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     color: var(--c-text-muted);
     cursor: pointer;
     transition: all 0.15s;
@@ -882,11 +904,11 @@ details.card > summary {
 .btn-destructive {
     background: var(--c-error-bg);
     border: 1px solid rgba(220,38,38,0.3);
-    border-radius: 10px;
-    padding: 0.55rem 1.2rem;
+    border-radius: var(--radius-btn);
+    padding: 0.6rem 1.4rem;
     font-family: var(--font-ui);
     font-weight: 600;
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     color: var(--c-error);
     cursor: pointer;
     transition: all 0.15s;
@@ -1071,6 +1093,136 @@ details.card > summary {
 @keyframes suggestionEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .suggestion-card { animation: suggestionEnter 0.25s ease; }
 
+/* ---- persistent auth bar above the Hero (additive - existing sign-in/out controls
+   elsewhere in the app are untouched) ---- */
+.auth-bar {
+    display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2);
+    padding: 0.5rem var(--sp-1) 0; font-family: var(--font-ui); font-size: 0.82rem;
+}
+.auth-bar-status { color: var(--c-text-muted); }
+.auth-bar-status b { color: var(--c-text); }
+
+/* ---- upload card: replaces the raw filename with icon + name + size + actions ---- */
+.dropzone.has-file { border-style: solid; padding: 0.85rem 1rem; text-align: left; cursor: default; }
+.upload-card { display: flex; align-items: center; gap: 0.75rem; width: 100%; }
+.upload-card-icon {
+    width: 38px; height: 38px; border-radius: var(--radius); flex-shrink: 0;
+    background: var(--c-success-bg); color: var(--c-success);
+    display: flex; align-items: center; justify-content: center;
+}
+.upload-card-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.15rem; text-align: left; }
+.upload-card-name { font-weight: 600; color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-card-meta { font-size: 0.76rem; color: var(--c-success); display: inline-flex; align-items: center; gap: 0.3rem; }
+.upload-card-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
+.upload-card-remove {
+    background: transparent; border: 1px solid var(--c-border); border-radius: 8px;
+    width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--c-text-muted); transition: all 0.15s;
+}
+.upload-card-remove:hover { background: var(--c-error-bg); border-color: rgba(220,38,38,0.3); color: var(--c-error); }
+
+/* ---- analysis progress: animated stage text + real elapsed/ETA, updated live ---- */
+.processing-stages { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; text-align: left; }
+.processing-stage-label { font-weight: 600; }
+.processing-timer { font-size: 0.74rem; opacity: 0.85; display: inline-flex; align-items: center; gap: 0.3rem; font-variant-numeric: tabular-nums; }
+
+/* ---- nav: icon/title spacing, single-row + More toggle, floating collapsed state ---- */
+.nav-pill { display: inline-flex; align-items: center; gap: 0.55rem; }
+.nav-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: nowrap; overflow-x: auto; width: 100%; }
+.nav-more-label {
+    color: rgba(255,255,255,0.38); font-family: var(--font-ui); font-size: 0.64rem;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; flex-shrink: 0; margin-left: 0.3rem;
+}
+.nav-more-toggle {
+    background: rgba(255,255,255,0.06); border: 1px solid transparent; border-radius: 10px;
+    width: 34px; height: 34px; flex-shrink: 0; margin-left: auto;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; cursor: pointer; transition: all 0.15s;
+}
+.nav-more-toggle:hover { background: rgba(255,255,255,0.14); }
+.nav-floating-toggle {
+    position: sticky; top: 0.85rem; z-index: 30; margin: 0 0 var(--sp-3);
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 50%;
+    width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--c-text-muted); box-shadow: var(--shadow-md);
+    transition: all 0.2s ease;
+}
+.nav-floating-toggle:hover { color: var(--c-text); transform: translateY(1px); }
+
+/* ---- rewrite suggestion status pills + mentor-rewrite override display ---- */
+.status-pill {
+    display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.22rem 0.6rem;
+    border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    color: #fff;
+}
+.status-pill-accepted { background: var(--c-success); }
+.status-pill-rejected { background: var(--c-error); }
+.rewrite-text-strike { text-decoration: line-through; opacity: 0.55; }
+.mentor-rewrite-text { display: flex; align-items: flex-start; gap: 0.35rem; color: var(--c-primary-dark); font-weight: 600; margin-top: 0.35rem; }
+
+/* ---- mentor feedback: attempt/date metadata + Previous Feedback collapsible ---- */
+.feedback-attempt-meta { font-size: 0.72rem; color: var(--c-text-muted); margin-left: auto; white-space: nowrap; }
+.previous-feedback { margin-top: var(--sp-2); }
+.previous-feedback summary { cursor: pointer; font-weight: 600; font-size: 0.85rem; font-family: var(--font-ui); }
+.previous-feedback .feedback-list { margin-top: var(--sp-2); }
+.feedback-item.dismissed { opacity: 0.6; filter: grayscale(0.3); }
+
+/* ---- mentor session Deactivate button ---- */
+.session-row { flex-wrap: wrap; }
+.session-deactivate { margin-left: auto; }
+
+/* ---- Job Matching page: consistent shortcut actions + breathing room ---- */
+.job-matching-page .scrape-row { margin-bottom: var(--sp-2); }
+.job-match-action {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+    padding: 0.65rem 1.2rem; font-family: var(--font-ui); font-weight: 700; font-size: 0.88rem;
+    color: var(--c-primary-dark); cursor: pointer; box-shadow: var(--shadow-sm); transition: all 0.18s ease;
+}
+.job-match-action:hover { border-color: var(--c-primary); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.job-match-action:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.job-match-compare { width: 100%; margin: var(--sp-2) 0 var(--sp-3); }
+.job-match-results { margin-bottom: var(--sp-3); }
+.job-match-shortcuts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-4); }
+.job-match-company { display: flex; align-items: center; gap: 0.35rem; color: var(--c-text-muted); font-size: 0.85rem; margin-top: 0.4rem; }
+.confidence-scale-hint { display: block; font-size: 0.72rem; font-weight: 400; color: var(--c-text-muted); text-transform: none; letter-spacing: 0; margin: 0.2rem 0 0.4rem; }
+
+/* ---- mentor workspace: PDF/preview toggle, editable preview, More panel, compose ---- */
+.mentor-workspace { position: relative; }
+.mentor-preview-toggle { display: flex; gap: 0.4rem; margin: var(--sp-2) 0; }
+.mentor-preview-toggle button {
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 999px;
+    padding: 0.4rem 0.95rem; font-family: var(--font-ui); font-size: 0.8rem; font-weight: 600;
+    color: var(--c-text-muted); cursor: pointer; transition: all 0.15s;
+}
+.mentor-preview-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+.mentor-preview-editor { min-height: 320px; }
+.mentor-preview-actions { display: flex; gap: 0.6rem; margin: var(--sp-2) 0; }
+.mentor-more-row { margin: var(--sp-3) 0 var(--sp-1); }
+.mentor-more-panel { margin-top: var(--sp-2); }
+.mentor-more-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: var(--sp-2); }
+.mentor-more-tabs button {
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 999px;
+    padding: 0.35rem 0.85rem; font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600;
+    color: var(--c-text-muted); cursor: pointer; transition: all 0.15s;
+}
+.mentor-more-tabs button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+.pill.suggest-edit-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem; background: transparent;
+    border: 1px solid var(--c-primary); border-radius: 999px; padding: 0.2rem 0.65rem;
+    font-family: var(--font-ui); font-size: 0.72rem; font-weight: 700; color: var(--c-primary-dark);
+    cursor: pointer; margin-left: auto; transition: all 0.15s;
+}
+.pill.suggest-edit-pill:hover { background: rgba(167,139,250,0.1); }
+.mentor-compose-fab {
+    position: fixed; bottom: 2rem; right: 2rem; z-index: 400;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--c-primary), var(--c-primary-dark)); color: #fff;
+    border: none; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 24px rgba(139,92,246,0.35); cursor: pointer; transition: all 0.2s ease;
+}
+.mentor-compose-fab:hover { transform: translateY(-2px) scale(1.04); }
+
 @media (max-width: 900px) {
     .app-container { padding: 1rem; }
     .hero-wrap { border-radius: 0 0 18px 18px; padding: 2rem 1rem 1.25rem; }
@@ -1098,4 +1250,7 @@ details.card > summary {
     .mobile-editor-toggle { display: flex; }
     .split-editor-pane.mobile-hidden { display: none; }
     .split-editor-head { justify-content: space-between; }
+    .job-match-shortcuts { grid-template-columns: 1fr; }
+    .auth-bar { justify-content: center; }
+    .mentor-compose-fab { bottom: 1.25rem; right: 1.25rem; }
 }

@@ -1,5 +1,6 @@
 import { Router } from "express"
 import fetch from "node-fetch"
+import crypto from "crypto"
 import { authenticateToken } from "../middleware/auth.js"
 import { getDb } from "../db.js"
 import { getOwnedAnalysis } from "../access.js"
@@ -8,6 +9,13 @@ import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.
 
 const router = Router()
 const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "local"])
+const COMPARE_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
+
+// identical resume+jd+provider text = an identical comparison prompt, so skip the LLM call
+// entirely and replay the last result - same idea as /analysis/run's content-hash cache
+function compareContentHash(resumeText, jdText, provider) {
+    return crypto.createHash("sha256").update(`${provider || ""}|${resumeText || ""}|${jdText || ""}`).digest("hex")
+}
 
 router.post("/jd", authenticateToken, async (req, res) => {
     const engineUrl = req.app.locals.engineUrl
@@ -94,6 +102,22 @@ router.post("/compare", authenticateToken, async (req, res) => {
         if (!job) return res.status(404).json({ error: "Job description not found." })
     }
 
+    const resumeText = req.body.resume_text || ""
+    const jdText = req.body.jd_text || ""
+    const contentHash = compareContentHash(resumeText, jdText, provider)
+    const db = getDb()
+
+    if (!req.body.force_refresh && COMPARE_CACHE_TTL_MINUTES > 0) {
+        const cached = db.prepare(
+            `SELECT result_json FROM job_matches WHERE user_id = ? AND content_hash = ? AND content_hash != '' AND created_at >= datetime('now', ?) ORDER BY created_at DESC LIMIT 1`
+        ).get(req.user.id, contentHash, `-${COMPARE_CACHE_TTL_MINUTES} minutes`)
+        if (cached) {
+            let data = {}
+            try { data = JSON.parse(cached.result_json) } catch {}
+            return res.json({ ...data, cached: true })
+        }
+    }
+
     let engineProvider, apiKey
     try {
         ({ engineProvider, apiKey } = resolveProviderForRequest(req.user.id, provider))
@@ -108,8 +132,8 @@ router.post("/compare", authenticateToken, async (req, res) => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                resume_text: req.body.resume_text || "",
-                jd_text: req.body.jd_text || "",
+                resume_text: resumeText,
+                jd_text: jdText,
                 provider: engineProvider,
                 local_endpoint: req.body.local_endpoint || "",
                 api_key: apiKey,
@@ -117,9 +141,9 @@ router.post("/compare", authenticateToken, async (req, res) => {
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
-        const saved = getDb().prepare(
-            "INSERT INTO job_matches (user_id, job_description_id, analysis_id, result_json, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
-        ).run(req.user.id, jobId, analysisId, JSON.stringify(data))
+        const saved = db.prepare(
+            "INSERT INTO job_matches (user_id, job_description_id, analysis_id, result_json, content_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+        ).run(req.user.id, jobId, analysisId, JSON.stringify(data), contentHash)
         res.json({ ...data, match_id: saved.lastInsertRowid })
     } catch (err) {
         res.status(500).json({ error: `Comparison failed: ${err.message}` })
