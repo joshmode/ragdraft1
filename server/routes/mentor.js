@@ -31,6 +31,16 @@ function diffLines(before, after) {
     return out
 }
 
+// attempt number = 1-based chronological rank of an analysis among ALL of that
+// candidate's analyses (not just whatever page/limit a given endpoint applies),
+// so "Attempt #4" stays stable and meaningful even once there are >50 analyses
+function attemptNumberMap(db, candidateId) {
+    const rows = db.prepare("SELECT id FROM analyses WHERE user_id = ? ORDER BY created_at ASC, id ASC").all(candidateId)
+    const map = {}
+    rows.forEach((r, i) => { map[r.id] = i + 1 })
+    return map
+}
+
 // resume text with accepted rewrites applied, so the diff shows real revisions
 function appliedSections(results) {
     const sections = results?.parsed_resume?.sections || results?.sections || {}
@@ -189,6 +199,7 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
         return res.status(404).json({ error: "Candidate not found in your review sessions." })
     }
     const db = getDb()
+    const attemptOf = attemptNumberMap(db, candidateId)
     const analyses = db.prepare(
         "SELECT id, resume_id, score_total, provider, model, job_description, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).all(candidateId)
@@ -198,7 +209,7 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
         WHERE a.user_id = ? ORDER BY rs.created_at DESC LIMIT 100
     `).all(candidateId)
     res.json({
-        analyses,
+        analyses: analyses.map(a => ({ ...a, attempt_number: attemptOf[a.id] || null })),
         revisions: snapshots.map(s => ({ ...s, decisions: JSON.parse(s.decisions_json || "{}") })),
     })
 })
@@ -215,9 +226,54 @@ router.get("/candidates/:candidateId/analyses/:analysisId", authenticateToken, r
         return res.status(404).json({ error: "Analysis not found." })
     }
     res.json({
-        id: loaded.row.id, score: loaded.row.score_total, provider: loaded.row.provider,
+        id: loaded.row.id, resume_id: loaded.row.resume_id, score: loaded.row.score_total, provider: loaded.row.provider,
         model: loaded.row.model, created_at: loaded.row.created_at, results: loaded.results,
     })
+})
+
+// the candidate's originally uploaded file, so the mentor's PDF viewer can render/highlight
+// it exactly the way the candidate's own Review Suggestions view does
+router.get("/candidates/:candidateId/resumes/:resumeId/file", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const resume = db.prepare("SELECT filename, raw_bytes FROM resumes WHERE id = ? AND user_id = ?").get(parseInt(req.params.resumeId), candidateId)
+    if (!resume) return res.status(404).json({ error: "Resume not found." })
+    if (!resume.filename.toLowerCase().endsWith(".pdf")) {
+        return res.status(415).json({ error: "Source preview is only available for PDF uploads." })
+    }
+    res.setHeader("Content-Type", "application/pdf")
+    res.send(resume.raw_bytes)
+})
+
+// a rendered preview of the candidate's tailored resume, for the mentor's Rewritten Preview
+// toggle - prefers whatever the candidate has actually generated (identical to what they see
+// on their own Tailored CV tab), and falls back to a plain structured markdown built from
+// applied rewrite decisions if the candidate hasn't generated a CV yet
+router.get("/candidates/:candidateId/analyses/:analysisId/preview", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const loaded = loadAnalysisWithDecisions(db, parseInt(req.params.analysisId))
+    if (!loaded || loaded.row.user_id !== candidateId) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    const generated = db.prepare(
+        "SELECT content FROM generated_documents WHERE analysis_id = ? AND user_id = ? AND document_type = 'cv' ORDER BY created_at DESC, id DESC LIMIT 1"
+    ).get(loaded.row.id, candidateId)
+    if (generated) return res.json({ markdown: generated.content, source: "generated" })
+
+    const sections = appliedSections(loaded.results)
+    const contact = loaded.results.parsed_resume?.contact || loaded.results.contact || {}
+    let md = contact.name ? `# ${contact.name}\n\n` : "# Resume\n\n"
+    for (const [sec, lines] of Object.entries(sections)) {
+        md += `## ${sec}\n---\n` + lines.map(l => `- ${l}`).join("\n") + "\n\n"
+    }
+    res.json({ markdown: md, source: "applied_sections" })
 })
 
 // pr-style per-section diff between two analyses of the same candidate
@@ -244,6 +300,26 @@ router.get("/candidates/:candidateId/diff", authenticateToken, requireRole("ment
         to: { id: to.row.id, score: to.row.score_total, created_at: to.row.created_at },
         sections,
     })
+})
+
+// mentor-only: every cover letter the candidate has generated, across all their
+// attempts - candidates themselves never get a browsing UI for this (they only ever
+// see their most-recently-generated one via /generate/latest), this is purely for
+// mentors reviewing a candidate's history under the Cover Letters "More" panel
+router.get("/candidates/:candidateId/cover-letters", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const attemptOf = attemptNumberMap(db, candidateId)
+    const rows = db.prepare(`
+        SELECT gd.id, gd.analysis_id, gd.company, gd.content, gd.created_at
+        FROM generated_documents gd JOIN analyses a ON a.id = gd.analysis_id
+        WHERE a.user_id = ? AND gd.document_type = 'cover_letter'
+        ORDER BY gd.created_at DESC LIMIT 100
+    `).all(candidateId)
+    res.json(rows.map(r => ({ ...r, attempt_number: attemptOf[r.analysis_id] || null })))
 })
 
 // a comment, or a suggested edit (original_text -> suggested_text)
@@ -292,7 +368,12 @@ router.get("/feedback", authenticateToken, requireRole("mentor"), (req, res) => 
             JOIN users u ON u.id = mf.candidate_id
             WHERE mf.mentor_id = ? ORDER BY mf.created_at DESC LIMIT 200
           `).all(req.user.id)
-    res.json(rows)
+    const attemptCache = {}
+    res.json(rows.map(r => {
+        if (!r.analysis_id) return { ...r, attempt_number: null }
+        if (!attemptCache[r.candidate_id]) attemptCache[r.candidate_id] = attemptNumberMap(db, r.candidate_id)
+        return { ...r, attempt_number: attemptCache[r.candidate_id][r.analysis_id] || null }
+    }))
 })
 
 // Candidate's inbox: all feedback addressed to them, newest first.
@@ -303,7 +384,8 @@ router.get("/feedback/inbox", authenticateToken, (req, res) => {
         JOIN users u ON u.id = mf.mentor_id
         WHERE mf.candidate_id = ? ORDER BY mf.created_at DESC LIMIT 200
     `).all(req.user.id)
-    res.json(rows)
+    const attemptOf = attemptNumberMap(db, req.user.id)
+    res.json(rows.map(r => ({ ...r, attempt_number: r.analysis_id ? (attemptOf[r.analysis_id] || null) : null })))
 })
 
 // Candidate resolves a feedback item (accepted / dismissed / open).

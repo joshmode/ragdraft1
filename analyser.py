@@ -801,8 +801,13 @@ def _apply_rewrites(
     acc_map: dict,
     suggestions: dict[str, list[dict]] | None,
     decisions: dict[str, bool] | None,
+    mentor_overrides: dict[str, str] | None = None,
 ) -> tuple[list[str], list[dict], list[dict]]:
-    if not suggestions or not decisions:
+    mentor_overrides = mentor_overrides or {}
+    decisions = decisions or {}
+    # a candidate can accept a mentor's suggested edit without ever touching the original
+    # Suggestions review flow, so mentor_overrides alone must still be enough to proceed
+    if not suggestions or (not decisions and not mentor_overrides):
         return [acc_map.get(line, line) for line in lines], [], []
 
     by_first = {
@@ -823,7 +828,15 @@ def _apply_rewrites(
 
         item = by_first.get(idx)
         decision = decisions.get(item.get("id")) if item else None
-        if item and decision is True:
+        # a candidate-accepted mentor rewrite for this exact bullet always wins, regardless
+        # of what the candidate did with the LLM's own suggestion - accepting the mentor's
+        # edit is a separate, more deliberate decision than the original accept/dismiss
+        override = mentor_overrides.get(item.get("id")) if item else None
+        if item and override:
+            out.append(override)
+            accepted.append(item)
+            skip_until = max(item.get("line_indices", [idx]))
+        elif item and decision is True:
             out.append(item.get("rewritten", item.get("original", line)))
             accepted.append(item)
             skip_until = max(item.get("line_indices", [idx]))
@@ -847,8 +860,12 @@ def gen_cv(
     rewrite_decisions: dict[str, bool] | None = None,
     model: str = "",
     api_key: str = "",
+    mentor_overrides: dict[str, str] | None = None,
 ) -> str:
-    """generate a tailored CV from resume data and accepted rewrites."""
+    """generate a tailored CV from resume data and accepted rewrites.
+
+    mentor_overrides maps a rewrite suggestion's id to text a mentor suggested and the
+    candidate has already accepted - that wins over the LLM's own rewrite for that bullet."""
     has_jd = bool(job_description.strip())
 
     # build resume text with only accepted rewrites
@@ -863,7 +880,7 @@ def gen_cv(
 
     for sec, lines in resume.sections.items():
         cv_text += f"\n=== {sec} ===\n"
-        applied, acc_sec, dis_sec = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions)
+        applied, acc_sec, dis_sec = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions, mentor_overrides)
         acc_items.extend(acc_sec)
         dis_items.extend(dis_sec)
         for line in applied:
@@ -926,7 +943,7 @@ def gen_cv(
             lines = resume.sections.get(sec, [])
             if not lines:
                 continue
-            applied, _, _ = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions)
+            applied, _, _ = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions, mentor_overrides)
             result += f"\n\n## {sec}\n---\n" + "\n".join(f"- {line}" for line in applied)
         return result
     except Exception as e:
