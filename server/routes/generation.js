@@ -65,22 +65,26 @@ function acceptedPreviewOverride(analysisId, candidateId) {
         SELECT suggested_text FROM mentor_feedback
         WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'edit'
           AND status = 'accepted' AND suggestion_key = ?
-        ORDER BY updated_at DESC LIMIT 1
+        ORDER BY updated_at DESC, id DESC LIMIT 1
     `).get(analysisId, candidateId, `preview:${analysisId}`)
     return row ? row.suggested_text : null
 }
 
-router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
-    if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
+router.post("/cv", authenticateToken, llmLimiter, async (req, res) => {
+    // coerced the same way /save and /latest already do below - passing the raw body
+    // value straight to better-sqlite3 crashes the whole process if it's ever a non-scalar
+    // (e.g. analysis_id: {}), since express doesn't catch a sync throw in an async handler
+    const analysisId = req.body.analysis_id ? parseInt(req.body.analysis_id) : null
+    if (req.body.analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
         return res.status(404).json({ error: "Analysis not found." })
     }
 
-    const previewOverride = acceptedPreviewOverride(req.body.analysis_id, req.user.id)
+    const previewOverride = acceptedPreviewOverride(analysisId, req.user.id)
     if (previewOverride !== null) {
-        if (req.body.analysis_id) {
+        if (analysisId) {
             getDb().prepare(
                 "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
-            ).run(req.body.analysis_id, req.user.id, "cv", previewOverride)
+            ).run(analysisId, req.user.id, "cv", previewOverride)
         }
         return res.json({ cv_text: previewOverride })
     }
@@ -89,7 +93,7 @@ router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
         acc_map: req.body.acc_map || {},
         rewrite_suggestions: req.body.rewrite_suggestions || null,
         rewrite_decisions: req.body.rewrite_decisions || null,
-        mentor_overrides: mentorOverridesFor(req.body.analysis_id, req.user.id),
+        mentor_overrides: mentorOverridesFor(analysisId, req.user.id),
     })
     if (!enginePayload) return
 
@@ -102,19 +106,20 @@ router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
-        if (req.body.analysis_id) {
+        if (analysisId) {
             getDb().prepare(
                 "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
-            ).run(req.body.analysis_id, req.user.id, "cv", data.cv_text || "")
+            ).run(analysisId, req.user.id, "cv", data.cv_text || "")
         }
         res.json(data)
     } catch (err) {
-        res.status(500).json({ error: `CV generation failed: ${err.message}` })
+        res.status(500).json({ error: "CV generation failed. Please try again." })
     }
 })
 
-router.post("/cover-letter", llmLimiter, authenticateToken, async (req, res) => {
-    if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
+router.post("/cover-letter", authenticateToken, llmLimiter, async (req, res) => {
+    const analysisId = req.body.analysis_id ? parseInt(req.body.analysis_id) : null
+    if (req.body.analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
         return res.status(404).json({ error: "Analysis not found." })
     }
     const enginePayload = buildEnginePayload(req, res, {})
@@ -129,14 +134,14 @@ router.post("/cover-letter", llmLimiter, authenticateToken, async (req, res) => 
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
-        if (req.body.analysis_id) {
+        if (analysisId) {
             getDb().prepare(
                 "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
-            ).run(req.body.analysis_id, req.user.id, "cover_letter", data.cover_letter_text || "", String(req.body.company || "").slice(0, 200))
+            ).run(analysisId, req.user.id, "cover_letter", data.cover_letter_text || "", String(req.body.company || "").slice(0, 200))
         }
         res.json(data)
     } catch (err) {
-        res.status(500).json({ error: `Cover letter generation failed: ${err.message}` })
+        res.status(500).json({ error: "Cover letter generation failed. Please try again." })
     }
 })
 

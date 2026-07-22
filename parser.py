@@ -479,22 +479,27 @@ def parse_docx(docx_file) -> ParsedResume:
 
     raw = docx_file.read() if hasattr(docx_file, "read") else docx_file
     import io
-    doc = Document(io.BytesIO(raw) if isinstance(raw, bytes) else raw)
+    try:
+        doc = Document(io.BytesIO(raw) if isinstance(raw, bytes) else raw)
 
-    all_lines: list[str] = []
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            all_lines.append(text)
+        all_lines: list[str] = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                all_lines.append(text)
 
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                text = cell.text.strip()
-                if text:
-                    all_lines.append(text)
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text = cell.text.strip()
+                    if text:
+                        all_lines.append(text)
 
-    return _lines_to_resume(all_lines)
+        return _lines_to_resume(all_lines)
+    except Exception as e:
+        result = ParsedResume()
+        result.warnings.append(f"couldn't open DOCX: {e}")
+        return result
 
 
 def parse_text(txt_file) -> ParsedResume:

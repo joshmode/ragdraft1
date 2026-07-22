@@ -1307,7 +1307,11 @@ details.card > summary {
         border-radius: 0; margin: 0; z-index: 60;
         padding: 0.35rem var(--sp-2);
     }
-    .nav-row { overflow-x: visible; flex-wrap: nowrap; justify-content: space-around; }
+    /* wrap, don't scroll-or-clip: with the More panel open this row holds 9 items (4
+       always-visible + 4 More + the toggle) at icon-only widths, which doesn't fit one
+       line on a phone - nowrap + overflow-x:visible let the excess spill off-screen with
+       no way to reach or even see it. Wrapping keeps every pill on-screen and tappable. */
+    .nav-row { overflow-x: visible; flex-wrap: wrap; justify-content: space-around; }
     .nav-pill { flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.4rem; min-height: 44px; justify-content: center; }
     .nav-pill span { font-size: 0.6rem; }
     .nav-pill:not(.active) span { display: none; }

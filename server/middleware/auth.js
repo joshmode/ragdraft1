@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken"
 import dotenv from "dotenv"
 import path from "path"
 import { fileURLToPath } from "url"
+import { getDb } from "../db.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -23,6 +24,14 @@ export function authenticateToken(req, res, next) {
     const token = header.split(" ")[1]
     try {
         const decoded = jwt.verify(token, JWT_SECRET)
+        // guest accounts are purged after GUEST_RETENTION_HOURS (see db.js's
+        // deleteExpiredGuests), but tokens are signed for 7 days - without this, a guest
+        // whose row was already deleted still passes auth, and any write then fails a raw
+        // foreign-key-constraint DB error instead of a clean, expected 401. Scoped to
+        // guests only so this doesn't add a DB round-trip to every authenticated request.
+        if (decoded.is_guest && !getDb().prepare("SELECT 1 FROM users WHERE id = ?").get(decoded.id)) {
+            return res.status(401).json({ error: "Invalid or expired token" })
+        }
         req.user = decoded
         next()
     } catch {
