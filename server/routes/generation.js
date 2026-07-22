@@ -117,6 +117,23 @@ async function exportDocument(req, res, path, type) {
     }
 }
 
+// persists in-place edits to a generated document so the "Saved" indicator is honest
+// and a refresh restores the edited text, not just the last-generated text
+router.post("/save", authenticateToken, (req, res) => {
+    const analysisId = parseInt(req.body.analysis_id)
+    const documentType = req.body.document_type
+    if (!["cv", "cover_letter"].includes(documentType)) {
+        return res.status(400).json({ error: "Unknown document type." })
+    }
+    if (!analysisId || !getOwnedAnalysis(analysisId, req.user.id)) {
+        return res.status(404).json({ error: "Analysis not found." })
+    }
+    getDb().prepare(
+        "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
+    ).run(analysisId, req.user.id, documentType, String(req.body.content ?? ""))
+    res.json({ ok: true })
+})
+
 // so switching tabs restores the last generated doc instead of forcing a regenerate
 router.get("/latest", authenticateToken, (req, res) => {
     const analysisId = parseInt(req.query.analysis_id)

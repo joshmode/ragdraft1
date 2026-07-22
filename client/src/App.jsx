@@ -674,16 +674,9 @@ function downloadText(text, filename) {
     URL.revokeObjectURL(href)
 }
 
-function SavedIndicator({ text }) {
-    const [state, setState] = useState("idle")
-    const firstRun = useRef(true)
-    useEffect(() => {
-        if (firstRun.current) { firstRun.current = false; return undefined }
-        setState("saving")
-        const t = setTimeout(() => setState("saved"), 500)
-        return () => clearTimeout(t)
-    }, [text])
+function SavedIndicator({ state }) {
     if (state === "idle") return null
+    if (state === "error") return <span className="saved-indicator error"><XCircle size={12} /> Save failed</span>
     return <span className={`saved-indicator ${state}`}>{state === "saving" ? <><Loader2 size={12} className="spin-icon" /> Saving…</> : <><CheckCircle2 size={12} /> Saved</>}</span>
 }
 
@@ -691,7 +684,26 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const [mobileTab, setMobileTab] = useState("edit")
+    const [saveState, setSaveState] = useState("idle")
     const title = type === "cv" ? "Tailored CV" : "Cover Letter"
+    const documentType = type === "cv" ? "cv" : "cover_letter"
+    const firstRun = useRef(true)
+
+    useEffect(() => {
+        if (firstRun.current) { firstRun.current = false; return undefined }
+        const id = analysisId || result.analysis_id
+        if (!text || !id) return undefined
+        setSaveState("saving")
+        const t = setTimeout(async () => {
+            try {
+                await api.post("/generate/save", { analysis_id: id, document_type: documentType, content: text })
+                setSaveState("saved")
+            } catch {
+                setSaveState("error")
+            }
+        }, 600)
+        return () => clearTimeout(t)
+    }, [text])
 
     async function generate() {
         setBusy(true)
@@ -746,7 +758,7 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
                     <button className={mobileTab === "edit" ? "active" : ""} onClick={() => setMobileTab("edit")}>Edit</button>
                     <button className={mobileTab === "preview" ? "active" : ""} onClick={() => setMobileTab("preview")}>Preview</button>
                 </div>
-                <SavedIndicator text={text} />
+                <SavedIndicator state={saveState} />
             </div>
             <div className="split-editor">
                 <div className={`split-editor-pane ${mobileTab === "edit" ? "" : "mobile-hidden"}`}>

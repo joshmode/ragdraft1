@@ -1016,6 +1016,7 @@ details.card > summary {
 .mobile-editor-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
 .saved-indicator { font-size: 0.76rem; color: var(--c-text-muted); display: inline-flex; align-items: center; gap: 0.3rem; margin-right: auto; font-family: var(--font-ui); }
 .saved-indicator.saved { color: var(--c-success); }
+.saved-indicator.error { color: var(--c-error); }
 
 /* ---- toast host ---- */
 .toast-host { position: fixed; bottom: 2rem; right: 2rem; z-index: 500; display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-end; }
