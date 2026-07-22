@@ -215,7 +215,7 @@ router.get("/history", authenticateToken, (req, res) => {
     })))
 })
 
-router.get("/analytics/overview", authenticateToken, (req, res) => {
+router.get("/insights/overview", authenticateToken, (req, res) => {
     const db = getDb()
     const rows = db.prepare(
         "SELECT id, resume_id, results_json, score_total, provider, model, created_at FROM analyses WHERE user_id = ? ORDER BY created_at ASC LIMIT 50"
@@ -236,7 +236,7 @@ router.get("/analytics/overview", authenticateToken, (req, res) => {
     res.json({ analyses })
 })
 
-router.get("/analytics/delta", authenticateToken, (req, res) => {
+router.get("/insights/delta", authenticateToken, (req, res) => {
     const from = getOwnedAnalysis(req.query.from, req.user.id)
     const to = getOwnedAnalysis(req.query.to, req.user.id)
     if (!from || !to) return res.status(404).json({ error: "Analysis not found." })

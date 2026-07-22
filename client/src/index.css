@@ -1066,7 +1066,7 @@ details.card > summary {
     margin-bottom: var(--sp-2);
 }
 
-/* ---- analytics: user-facing stat grid + technical details ---- */
+/* ---- insights: user-facing stat grid + technical details ---- */
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-4); }
 .stat-card { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--radius); padding: var(--sp-2); display: flex; flex-direction: column; gap: 0.2rem; }
 .stat-label { font-family: var(--font-ui); font-size: var(--text-caption); color: var(--c-text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1339,7 +1339,7 @@ details.card > summary {
     details.card > summary, .rewrite-details > summary { padding: 0.75rem 1rem; min-height: 44px; display: flex; align-items: center; }
     .technical-details summary, .previous-feedback summary { padding: 0.75rem 0; min-height: 44px; display: flex; align-items: center; }
 
-    /* ---- Analytics: denser heatmap cells (still horizontally scrollable, not
+    /* ---- Insights: denser heatmap cells (still horizontally scrollable, not
        illegibly compressed), history rows stack instead of 3 rigid columns ---- */
     .heatmap-square { width: 56px; height: 44px; }
     .history-list > div { grid-template-columns: 1fr; row-gap: 0.15rem; }

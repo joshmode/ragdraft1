@@ -891,7 +891,7 @@ const SECTION_ORDER = [
     "AWARDS", "PUBLICATIONS", "VOLUNTEER", "LANGUAGES", "INTERESTS", "REFERENCES",
 ]
 
-function Analytics({ result, history, decisions }) {
+function Insights({ result, history, decisions }) {
     const timing = result.timing || {}
     const [consent, setConsent] = useState(false)
     const [confidence, setConfidence] = useState("")
@@ -901,7 +901,7 @@ function Analytics({ result, history, decisions }) {
     const [overview, setOverview] = useState(null)
 
     useEffect(() => {
-        api.get("/analysis/analytics/overview").then(res => setOverview(res.data.analyses || [])).catch(() => setOverview([]))
+        api.get("/analysis/insights/overview").then(res => setOverview(res.data.analyses || [])).catch(() => setOverview([]))
     }, [])
 
     async function submitFeedback() {
@@ -948,7 +948,7 @@ function Analytics({ result, history, decisions }) {
     const titleCase = s => s[0] + s.slice(1).toLowerCase()
 
     return <section>
-        <h2 className="view-title">Analytics</h2>
+        <h2 className="view-title">Insights</h2>
 
         <div className="metric-grid">
             <div className="stat-card">
@@ -1922,7 +1922,7 @@ function App() {
                     {view === "Tailored CV" && <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} fullName={fullName} />}
                     {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} />}
                     {view === "Mentor Feedback" && <FeedbackInbox />}
-                    {view === "Insights" && <Analytics result={result} history={history} decisions={decisions} />}
+                    {view === "Insights" && <Insights result={result} history={history} decisions={decisions} />}
                     {view === "Job Matching" && <JobMatching
                         result={result} provider={provider} localEndpoint={localEndpoint}
                         jobMatchState={jobMatchState} setJobMatchState={setJobMatchState}
