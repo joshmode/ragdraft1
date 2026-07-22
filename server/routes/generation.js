@@ -54,10 +54,37 @@ function mentorOverridesFor(analysisId, candidateId) {
     return Object.fromEntries(rows.map(r => [r.suggestion_key, r.suggested_text]))
 }
 
+// the mentor workspace's "Rewritten Preview" editor (see mentor.js's /preview endpoint) can
+// produce a whole-document edit, stored as a single mentor_feedback row keyed
+// "preview:<analysisId>" rather than a per-bullet suggestion_key - _apply_rewrites has no
+// bullet to match that key against, so a candidate-accepted preview edit has to be applied
+// here directly as the entire generated CV, superseding the LLM/per-bullet path entirely
+function acceptedPreviewOverride(analysisId, candidateId) {
+    if (!analysisId) return null
+    const row = getDb().prepare(`
+        SELECT suggested_text FROM mentor_feedback
+        WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'edit'
+          AND status = 'accepted' AND suggestion_key = ?
+        ORDER BY updated_at DESC LIMIT 1
+    `).get(analysisId, candidateId, `preview:${analysisId}`)
+    return row ? row.suggested_text : null
+}
+
 router.post("/cv", llmLimiter, authenticateToken, async (req, res) => {
     if (req.body.analysis_id && !getOwnedAnalysis(req.body.analysis_id, req.user.id)) {
         return res.status(404).json({ error: "Analysis not found." })
     }
+
+    const previewOverride = acceptedPreviewOverride(req.body.analysis_id, req.user.id)
+    if (previewOverride !== null) {
+        if (req.body.analysis_id) {
+            getDb().prepare(
+                "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))"
+            ).run(req.body.analysis_id, req.user.id, "cv", previewOverride)
+        }
+        return res.json({ cv_text: previewOverride })
+    }
+
     const enginePayload = buildEnginePayload(req, res, {
         acc_map: req.body.acc_map || {},
         rewrite_suggestions: req.body.rewrite_suggestions || null,

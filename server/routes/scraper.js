@@ -12,9 +12,11 @@ const PROVIDER_CHOICES = new Set(["default", "gemini", "claude", "chatgpt", "loc
 const COMPARE_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
 
 // identical resume+jd+provider text = an identical comparison prompt, so skip the LLM call
-// entirely and replay the last result - same idea as /analysis/run's content-hash cache
-function compareContentHash(resumeText, jdText, provider) {
-    return crypto.createHash("sha256").update(`${provider || ""}|${resumeText || ""}|${jdText || ""}`).digest("hex")
+// entirely and replay the last result - same idea as /analysis/run's content-hash cache.
+// localEndpoint must be part of the key: for provider "local" it's what actually picks the
+// model, and two different endpoints must never share a cached result (see analysis.js).
+function compareContentHash(resumeText, jdText, provider, localEndpoint) {
+    return crypto.createHash("sha256").update(`${provider || ""}|${localEndpoint || ""}|${resumeText || ""}|${jdText || ""}`).digest("hex")
 }
 
 router.post("/jd", authenticateToken, async (req, res) => {
@@ -104,7 +106,8 @@ router.post("/compare", authenticateToken, async (req, res) => {
 
     const resumeText = req.body.resume_text || ""
     const jdText = req.body.jd_text || ""
-    const contentHash = compareContentHash(resumeText, jdText, provider)
+    const localEndpoint = req.body.local_endpoint || ""
+    const contentHash = compareContentHash(resumeText, jdText, provider, localEndpoint)
     const db = getDb()
 
     if (!req.body.force_refresh && COMPARE_CACHE_TTL_MINUTES > 0) {
@@ -135,7 +138,7 @@ router.post("/compare", authenticateToken, async (req, res) => {
                 resume_text: resumeText,
                 jd_text: jdText,
                 provider: engineProvider,
-                local_endpoint: req.body.local_endpoint || "",
+                local_endpoint: localEndpoint,
                 api_key: apiKey,
             }),
         })
