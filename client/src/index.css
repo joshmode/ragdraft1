@@ -301,6 +301,15 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
 .severity-dot.yellow { background: #E8A735; }
 .severity-dot.green { background: #15C39A; }
 
+.rewrite-details > summary {
+    cursor: pointer;
+    padding: 0.7rem 1rem 0;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #6B7280;
+}
 .rewrite-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -746,6 +755,7 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
 .heatmap-square:hover { transform: scale(1.08); }
 .heatmap-square.empty { background: #F0F1F3 !important; color: #C1C5CB; text-shadow: none; font-size: 0.85rem; }
 .mentor-table { overflow-x: auto; }
+.mentor-history-table-wrap { overflow-x: auto; }
 .mentor-table table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .mentor-table th, .mentor-table td { padding: 0.65rem; border-bottom: 1px solid #E8EAED; text-align: left; }
 .mentor-table th { color: #6B7280; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -1233,6 +1243,16 @@ details.card > summary {
     .two-col, .two-col-pdf, .three-col { grid-template-columns: 1fr; }
     .workspace { grid-template-columns: 1fr; }
     .sidebar { position: static; max-height: none; }
+    /* once the sidebar goes full-width here, the score tooltip's fixed
+       left:calc(100% + 14px)/min-width:200px positioning pushes it well past the
+       viewport edge even while invisible (visibility:hidden still participates in
+       layout) - reposition below-right and cap its width instead of letting it blow
+       out document-level horizontal scroll on every screen the sidebar appears on */
+    .score-tooltip-wrap .score-tooltip {
+        left: auto; right: 0; top: calc(100% + 10px); bottom: auto;
+        transform: none; max-width: calc(100vw - 2.5rem); white-space: normal;
+    }
+    .score-tooltip-wrap .score-tooltip::after { display: none; }
     .model-bar { align-items: stretch; flex-direction: column; }
     .model-bar select { min-width: 0; }
     .annotation-input { flex-direction: column; }
@@ -1253,4 +1273,89 @@ details.card > summary {
     .job-match-shortcuts { grid-template-columns: 1fr; }
     .auth-bar { justify-content: center; }
     .mentor-compose-fab { bottom: 1.25rem; right: 1.25rem; }
+}
+
+/* =========================================================================
+   Phone tier - a dedicated pass layered on top of the 900px tablet block
+   above (which stays untouched). Purely viewport-driven, no manual toggle.
+   ========================================================================= */
+@media (max-width: 640px) {
+    /* ---- Hero: further compaction, no structural change ---- */
+    .hero-wrap { padding: 1.5rem 1rem 1.1rem; border-radius: 0 0 14px 14px; margin-bottom: 1.25rem; }
+    .hero-eyebrow { font-size: 0.62rem; margin-bottom: 0.5rem; }
+    .hero-title { font-size: 1.9rem; }
+    .hero-sub { font-size: 0.88rem; line-height: 1.5; }
+
+    /* ---- progress stepper: already horizontally scrollable - denser + a scroll cue ---- */
+    .pipeline-stepper {
+        scroll-snap-type: x proximity;
+        mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+        -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+    }
+    .pipeline-step { scroll-snap-align: start; }
+    .pipeline-step-icon { width: 22px; height: 22px; }
+    .pipeline-step-label { font-size: 0.72rem; }
+
+    /* ---- primary nav: dock to the bottom of the viewport like a native tab bar.
+       Same DOM/state as desktop (ALWAYS_NAV/MORE_NAV pills, moreOpen) - only restyled.
+       Stays permanently pinned; the scroll-hide effect is width-guarded off below this
+       breakpoint in App.jsx, with a resize listener to un-stick it if the viewport
+       crosses into this tier while already hidden. ---- */
+    .app-container { padding-bottom: calc(60px + var(--sp-3)); }
+    .top-nav {
+        position: fixed; top: auto; bottom: 0; left: 0; right: 0;
+        border-radius: 0; margin: 0; z-index: 60;
+        padding: 0.35rem var(--sp-2);
+    }
+    .nav-row { overflow-x: visible; flex-wrap: nowrap; justify-content: space-around; }
+    .nav-pill { flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.4rem; min-height: 44px; justify-content: center; }
+    .nav-pill span { font-size: 0.6rem; }
+    .nav-pill:not(.active) span { display: none; }
+    .nav-more-label { display: none; }
+    .nav-more-toggle { min-height: 44px; min-width: 44px; flex-direction: column; }
+    .nav-floating-toggle { display: none; }
+    .toast-host, .toast { bottom: calc(60px + 0.75rem); }
+    .mentor-compose-fab { bottom: calc(60px + 0.75rem); right: 1rem; }
+
+    /* ---- Suggestions (highest priority): PDF stays primary/visible, just trimmed;
+       the Original/AI-rewrite diff is now an expandable <details> (see App.jsx) so a
+       phone user can collapse it and jump straight to Accept/Dismiss; touch targets ---- */
+    .pdf-frame, .pdf-shell { min-height: 440px; }
+    .suggestion-head { flex-wrap: wrap; }
+    .kbd-hint { display: none; }
+    .btn-arrow { min-height: 44px; min-width: 44px; }
+    .suggestion-jump { min-height: 44px; }
+    .decision-actions .btn-primary, .decision-actions .btn-secondary, .decision-actions .btn-ghost { min-height: 44px; }
+    .review-toolbar .btn-secondary, .review-toolbar .btn-ghost { min-height: 44px; }
+
+    /* ---- Tailored CV / Cover Letter: keep the existing Edit/Preview tab precedent as-is,
+       just give the active pane a smaller FIXED height (not vh-based - mobile browser
+       chrome show/hide would otherwise jitter the layout on scroll) ---- */
+    textarea.doc-editor { min-height: 420px; }
+    .doc-preview { max-height: 420px; }
+
+    /* ---- shared accordion touch target: fixes ExtractedSections, Technical Details,
+       Previous Feedback, and the new Suggestions rewrite-details disclosure at once ---- */
+    details.card > summary, .rewrite-details > summary { padding: 0.75rem 1rem; min-height: 44px; display: flex; align-items: center; }
+    .technical-details summary, .previous-feedback summary { padding: 0.75rem 0; min-height: 44px; display: flex; align-items: center; }
+
+    /* ---- Analytics: denser heatmap cells (still horizontally scrollable, not
+       illegibly compressed), history rows stack instead of 3 rigid columns ---- */
+    .heatmap-square { width: 56px; height: 44px; }
+    .history-list > div { grid-template-columns: 1fr; row-gap: 0.15rem; }
+
+    /* ---- Mentor Dashboard: give Deactivate its own clear tap target when wrapped ---- */
+    .session-deactivate { flex-basis: 100%; margin-left: 0; justify-content: center; min-height: 44px; }
+
+    /* ---- Mentor workspace: the open analysis (PDF/preview + suggestions) is what a
+       mentor is actively working on - paint it before the History/Compare/Feedback-Sent
+       meta column. Pure paint-order change only: DOM order, keyboard Tab order, and
+       screen-reader reading order are unaffected (accepted tradeoff, see plan). ---- */
+    .mentor-workspace .two-col > div:first-child { order: 2; }
+    .mentor-workspace .two-col > div:last-child { order: 1; }
+    .mentor-preview-toggle { flex-wrap: wrap; }
+    .mentor-preview-toggle button { min-height: 44px; }
+
+    /* ---- Job Matching: touch-friendly actions ---- */
+    .job-match-action, .job-match-compare { min-height: 44px; }
 }

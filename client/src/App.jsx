@@ -717,18 +717,21 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
                         {state === false && <span className="status-pill status-pill-rejected"><XCircle size={12} /> Rejected</span>}
                         <span className="fw-badge">{current.item.framework_used}</span>
                     </div>
-                    <div className="rewrite-grid">
-                        <div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{current.item.original}</p></div>
-                        <div className="rewrite-pane after">
-                            <span className="pane-label">Suggested rewrite</span>
-                            {mentorEdits[current.key]?.status === "accepted" ? (
-                                <>
-                                    <p className="rewrite-text rewrite-text-strike">{current.item.rewritten}</p>
-                                    <p className="rewrite-text mentor-rewrite-text"><Users size={12} /> {mentorEdits[current.key].suggested_text}</p>
-                                </>
-                            ) : <p className="rewrite-text">{current.item.rewritten}</p>}
+                    <details className="rewrite-details" open>
+                        <summary>Original vs. suggested rewrite</summary>
+                        <div className="rewrite-grid">
+                            <div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{current.item.original}</p></div>
+                            <div className="rewrite-pane after">
+                                <span className="pane-label">Suggested rewrite</span>
+                                {mentorEdits[current.key]?.status === "accepted" ? (
+                                    <>
+                                        <p className="rewrite-text rewrite-text-strike">{current.item.rewritten}</p>
+                                        <p className="rewrite-text mentor-rewrite-text"><Users size={12} /> {mentorEdits[current.key].suggested_text}</p>
+                                    </>
+                                ) : <p className="rewrite-text">{current.item.rewritten}</p>}
+                            </div>
                         </div>
-                    </div>
+                    </details>
                     <div className="reasoning-row"><Lightbulb size={13} /> {current.item.reasoning}</div>
                 </div>
                 <div className="decision-actions">
@@ -1231,7 +1234,7 @@ function CandidateDetail({ candidate, onBack }) {
             <div>
                 <details className="card" open={historyOpen} onToggle={e => setHistoryOpen(e.currentTarget.open)}>
                     <summary>Analysis History {historyOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</summary>
-                    <table><thead><tr><th>Date</th><th>Score</th><th>Model</th><th /></tr></thead><tbody>
+                    <div className="mentor-history-table-wrap"><table><thead><tr><th>Date</th><th>Score</th><th>Model</th><th /></tr></thead><tbody>
                         {analyses.map(a => <tr key={a.id}>
                             <td>{String(a.created_at || "").slice(0, 16)}</td>
                             <td style={{ color: getScoreCfg(a.score_total).color, fontWeight: 700 }}>{a.score_total}</td>
@@ -1239,7 +1242,7 @@ function CandidateDetail({ candidate, onBack }) {
                             <td><button className="btn-secondary btn-small" onClick={() => openAnalysis(a.id)}>Open</button></td>
                         </tr>)}
                         {!analyses.length && <tr><td colSpan={4} className="muted">No analyses yet.</td></tr>}
-                    </tbody></table>
+                    </tbody></table></div>
                 </details>
                 <span className="section-label">Compare Revisions</span>
                 <div className="card">
@@ -1701,6 +1704,7 @@ function App() {
         if (!result) return undefined
         function onScroll() {
             if (recentFieldFocusRef.current) return
+            if (window.innerWidth <= 640) return // docked bottom nav below this width - never auto-hide it
             const y = window.scrollY
             const threshold = window.innerHeight * 0.2
             const delta = y - navScrollAnchorRef.current
@@ -1715,6 +1719,18 @@ function App() {
         window.addEventListener("scroll", onScroll, { passive: true })
         return () => window.removeEventListener("scroll", onScroll)
     }, [result, navHidden])
+
+    // if the viewport crosses into the phone tier while the nav is already hidden (e.g. a
+    // resize or orientation change), un-hide it immediately - otherwise the docked bottom
+    // nav's CSS never gets a chance to apply, since TopNav renders only the floating toggle
+    // while `hidden` is true, and the scroll guard above stops new hides but can't undo one
+    useEffect(() => {
+        function onResize() {
+            if (window.innerWidth <= 640 && navHidden) setNavHidden(false)
+        }
+        window.addEventListener("resize", onResize)
+        return () => window.removeEventListener("resize", onResize)
+    }, [navHidden])
 
     function toggleSidebar() {
         setSidebarCollapsed(prev => {
