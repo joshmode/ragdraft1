@@ -149,6 +149,16 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
 }
 .card:hover { box-shadow: 0 4px 12px rgba(13,15,17,0.07); transform: translateY(-1px); }
 
+/* Phase Y item 68: shown instead of a view's real content when the current attempt is a
+   Fast Cover Letter Workflow one and this view needs real analysis data to mean anything */
+.analysis-gate { display: flex; flex-direction: column; align-items: center; gap: 0.9rem; padding: 2.5rem 1.5rem; text-align: center; color: var(--c-text-muted); }
+.analysis-gate svg { color: var(--c-primary-dark); }
+.analysis-gate p { max-width: 420px; margin: 0; }
+
+/* Fast Cover Letter Workflow attempt: no score ring, just an honest explanation */
+.score-cta { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.1rem 0.5rem; text-align: center; color: var(--c-primary-dark); }
+.score-cta p { margin: 0; }
+
 /* score reads top-down: ring with the number inside, tier label under it, then hint */
 .score-stack { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; padding: 0.4rem 0 0.25rem; text-align: center; }
 .score-ring {
@@ -188,6 +198,9 @@ html, body { font-family: var(--font-ui), sans-serif; color: var(--c-text); back
     letter-spacing: 0.01em;
 }
 .score-sub, .muted { font-size: 0.8rem; color: #6B7280; }
+/* a plain block-level paragraph wraps naturally instead of being clipped by an input's
+   fixed width/padding, unlike relying on the input's own placeholder text to explain itself */
+.session-join-hint { margin: 0.3rem 0 0.6rem; line-height: 1.4; }
 
 .score-tooltip-wrap { position: relative; cursor: pointer; }
 .score-tooltip-wrap .score-tooltip {
@@ -588,8 +601,10 @@ select.input-field {
     border: 1px solid #E8EAED;
 }
 .annotation-card .ann-user { font-weight: 700; color: #0D0F11; margin-right: 0.5rem; }
+.annotation-card .ann-user.ann-user-mentor { color: var(--c-primary-dark); }
 .annotation-card .ann-time { color: #6B7280; font-size: 0.75rem; }
 .annotation-card .ann-body { margin-top: 0.3rem; }
+.annotation-empty { margin-bottom: 0.75rem; }
 
 .auth-card {
     max-width: 420px;
@@ -663,6 +678,45 @@ select.input-field {
 .setup-band { margin-bottom: 1.5rem; }
 .setup-band small { color: #6B7280; font-family: var(--font-ui); font-weight: 500; text-transform: none; }
 .analyse-btn { margin-top: 1rem; width: 100%; }
+
+/* ---- Phase Y: split "Analyse My Resume ▼ / Generate My Cover Letter" entry point.
+   85/15 split, two purple shades - the main segment is the familiar gradient .btn-primary,
+   the caret segment is a flat, darker purple so the two clickable zones read as distinct
+   without looking like two unrelated buttons. ---- */
+.split-btn { position: relative; margin-top: 1rem; display: flex; width: 100%; }
+.split-btn-main {
+    flex: 1 1 85%;
+    border-top-right-radius: 0; border-bottom-right-radius: 0;
+    border-right: none;
+    justify-content: center;
+}
+.split-btn-caret {
+    flex: 0 0 auto; width: 15%; min-width: 44px;
+    background: var(--c-primary-dark);
+    color: #f8f8f2; border: 1px solid rgba(139, 92, 246, 0.6); border-left: 1px solid rgba(255,255,255,0.25);
+    border-top-right-radius: var(--radius-btn); border-bottom-right-radius: var(--radius-btn);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.18s ease;
+}
+.split-btn-caret:hover { background: #7c3aed; }
+.split-btn-caret:disabled { opacity: 0.5; cursor: not-allowed; }
+.split-btn-caret svg { transition: transform 0.15s ease; }
+.split-btn-menu {
+    position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 40;
+    width: min(340px, 100%); background: var(--c-surface); border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg); box-shadow: 0 16px 40px rgba(0,0,0,0.22);
+    padding: 0.4rem; animation: floatingComposerIn 0.15s ease;
+}
+.split-btn-menu-item {
+    display: flex; align-items: flex-start; gap: 0.6rem; width: 100%; text-align: left;
+    background: transparent; border: none; border-radius: 10px; padding: 0.6rem 0.7rem;
+    cursor: pointer; transition: background 0.12s ease; color: var(--c-text);
+}
+.split-btn-menu-item:hover { background: rgba(139,92,246,0.08); }
+.split-btn-menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.split-btn-menu-item svg { color: var(--c-primary-dark); flex-shrink: 0; margin-top: 0.15rem; }
+.split-btn-menu-item span { display: flex; flex-direction: column; gap: 0.15rem; font-family: var(--font-ui); font-weight: 700; font-size: 0.88rem; }
+.split-btn-menu-item small { color: var(--c-text-muted); font-weight: 500; font-size: 0.74rem; }
 .key-card { border-color: rgba(139,92,246,0.35); }
 .auth-page { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
 .auth-tab { background: transparent; border: 0; font-family: var(--font-ui); }
@@ -777,9 +831,10 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
    position:fixed with no toggle ever wired up, so it just sat on top of the page */
 .workspace {
     display: grid;
-    grid-template-columns: 300px minmax(0, 1fr);
+    grid-template-columns: 320px minmax(0, 1fr);
     gap: 1.5rem;
     align-items: start;
+    transition: grid-template-columns 0.3s ease;
 }
 .workspace-main { min-width: 0; }
 
@@ -789,7 +844,18 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
     max-height: calc(100vh - 2.5rem);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
+/* the sidebar toggles between two different content trees (icon-only vs full card) rather
+   than one continuously-resizing tree, so a plain opacity fade-in on remount reads as
+   smooth instead of an abrupt pop, while the actual width change (driven by .workspace's
+   grid-template-columns transition above) is what does the real "sliding" animation */
+.sidebar-content-fade {
+    animation: sidebarContentFade 0.25s ease;
+    display: flex; flex-direction: column; flex: 1; min-height: 0;
+}
+.sidebar-collapsed .sidebar-content-fade { align-items: center; gap: var(--sp-2); }
+@keyframes sidebarContentFade { from { opacity: 0; } to { opacity: 1; } }
 
 /* only the cards below the score card scroll internally, so the score
    tooltip (anchored to the score card, just above this wrapper) never
@@ -941,15 +1007,6 @@ details.card > summary {
     gap: var(--sp-4);
     box-shadow: var(--shadow-md);
 }
-.nav-group { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.nav-group-label {
-    display: flex; align-items: center; gap: 0.3rem;
-    color: rgba(255,255,255,0.38);
-    font-family: var(--font-ui);
-    font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-    flex-shrink: 0;
-}
-.nav-group-items { display: flex; gap: 0.3rem; flex-wrap: wrap; }
 .nav-pill svg { flex-shrink: 0; }
 
 /* ---- guided pipeline stepper ---- */
@@ -1009,7 +1066,6 @@ details.card > summary {
 .sidebar-metadata-btn { width: 100%; margin-bottom: var(--sp-2); }
 .sidebar-collapsed {
     width: 64px;
-    display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
     padding-top: 0.35rem;
 }
 .sidebar-collapsed-score { font-family: var(--font-serif); font-size: 1.6rem; font-weight: 400; }
@@ -1136,9 +1192,20 @@ details.card > summary {
 .processing-stage-label { font-weight: 600; }
 .processing-timer { font-size: 0.74rem; opacity: 0.85; display: inline-flex; align-items: center; gap: 0.3rem; font-variant-numeric: tabular-nums; }
 
-/* ---- nav: icon/title spacing, single-row + More toggle, floating collapsed state ---- */
+/* ---- nav: icon/title spacing, single-row + always-visible More toggle ----
+   the nav never auto-hides/floats (see App.jsx - the old scroll-driven navHidden effect
+   was removed entirely); the only animated state here is the More group expanding in place */
 .nav-pill { display: inline-flex; align-items: center; gap: 0.55rem; }
-.nav-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: nowrap; overflow-x: auto; width: 100%; }
+.nav-row { display: flex; align-items: center; gap: 0.4rem; width: 100%; }
+/* centers the always-visible tabs regardless of the toggle's fixed right-hand position -
+   .nav-more-toggle's margin-left:auto would otherwise defeat justify-content on a shared row */
+.nav-tabs { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.4rem; flex: 1; min-width: 0; }
+.nav-more-group {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
+    max-width: 0; opacity: 0; overflow: hidden; pointer-events: none;
+    transition: max-width 0.35s ease, opacity 0.25s ease;
+}
+.nav-more-group.open { max-width: 600px; opacity: 1; overflow: visible; pointer-events: auto; }
 .nav-more-label {
     color: rgba(255,255,255,0.38); font-family: var(--font-ui); font-size: 0.64rem;
     font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; flex-shrink: 0; margin-left: 0.3rem;
@@ -1147,17 +1214,11 @@ details.card > summary {
     background: rgba(255,255,255,0.06); border: 1px solid transparent; border-radius: 10px;
     width: 34px; height: 34px; flex-shrink: 0; margin-left: auto;
     display: flex; align-items: center; justify-content: center;
-    color: #fff; cursor: pointer; transition: all 0.15s;
+    color: #fff; cursor: pointer; transition: background 0.15s;
 }
 .nav-more-toggle:hover { background: rgba(255,255,255,0.14); }
-.nav-floating-toggle {
-    position: sticky; top: 0.85rem; z-index: 30; margin: 0 0 var(--sp-3);
-    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 50%;
-    width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
-    cursor: pointer; color: var(--c-text-muted); box-shadow: var(--shadow-md);
-    transition: all 0.2s ease;
-}
-.nav-floating-toggle:hover { color: var(--c-text); transform: translateY(1px); }
+.nav-more-toggle svg { transition: transform 0.25s ease; }
+.nav-more-toggle.open svg { transform: rotate(180deg); }
 
 /* ---- rewrite suggestion status pills + mentor-rewrite override display ---- */
 .status-pill {
@@ -1233,6 +1294,35 @@ details.card > summary {
 }
 .mentor-compose-fab:hover { transform: translateY(-2px) scale(1.04); }
 
+/* ---- mentor Analysis History: spacing/typography/hierarchy/hover polish (no functional change) ---- */
+.mentor-history-card { margin-bottom: var(--sp-2); }
+.mentor-history-card summary { font-size: 0.92rem; }
+.mentor-history-table-wrap table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.mentor-history-table-wrap th, .mentor-history-table-wrap td { padding: 0.6rem 0.85rem; border-bottom: 1px solid #E8EAED; text-align: left; }
+.mentor-history-table-wrap th { color: #6B7280; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
+.mentor-history-table-wrap tbody tr { transition: background 0.12s ease; }
+.mentor-history-table-wrap tbody tr:hover { background: rgba(139,92,246,0.05); }
+.mentor-history-table-wrap tbody tr:last-child td { border-bottom: none; }
+.mentor-history-table-wrap tr.mentor-history-row-open { background: rgba(139,92,246,0.07); }
+.mentor-history-table-wrap tr.mentor-history-row-open td:first-child { font-weight: 600; color: var(--c-text); }
+
+/* ---- item 60: floating comment/edit composer - a portaled panel docked to a screen
+   corner rather than an inline element, so opening/closing it never reflows the
+   Extracted Sections list or the PDF and the mentor's scroll position in both is
+   untouched by construction ---- */
+.floating-composer {
+    position: fixed; right: 1.75rem; bottom: 1.75rem; z-index: 450;
+    width: min(420px, calc(100vw - 2rem)); max-height: min(72vh, 640px);
+    overflow-y: auto; background: var(--c-surface); border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    padding: var(--sp-3);
+    animation: floatingComposerIn 0.18s ease;
+}
+@keyframes floatingComposerIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+.floating-composer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.floating-composer-head h4 { font-family: var(--font-ui); font-size: 0.95rem; font-weight: 700; }
+.floating-composer .composer { margin-top: 0; }
+
 @media (max-width: 900px) {
     .app-container { padding: 1rem; }
     .hero-wrap { border-radius: 0 0 18px 18px; padding: 2rem 1rem 1.25rem; }
@@ -1262,7 +1352,8 @@ details.card > summary {
     .detail-head { flex-wrap: wrap; }
     .scrape-row { grid-template-columns: 1fr; }
     .workspace.sidebar-is-collapsed { grid-template-columns: 1fr; }
-    .sidebar-collapsed { width: 100%; flex-direction: row; justify-content: space-between; padding: 0.75rem 1rem; }
+    .sidebar-collapsed { width: 100%; padding: 0.75rem 1rem; }
+    .sidebar-collapsed .sidebar-content-fade { flex-direction: row; justify-content: space-between; }
     .sidebar-collapsed-icons { flex-direction: row; }
     .top-nav { gap: var(--sp-2); }
     .view-title { font-size: 1.7rem; }
@@ -1298,28 +1389,28 @@ details.card > summary {
 
     /* ---- primary nav: dock to the bottom of the viewport like a native tab bar.
        Same DOM/state as desktop (ALWAYS_NAV/MORE_NAV pills, moreOpen) - only restyled.
-       Stays permanently pinned; the scroll-hide effect is width-guarded off below this
-       breakpoint in App.jsx, with a resize listener to un-stick it if the viewport
-       crosses into this tier while already hidden. ---- */
+       Always visible, never hides on scroll (no JS-driven hide behavior exists at all now). */
     .app-container { padding-bottom: calc(60px + var(--sp-3)); }
     .top-nav {
         position: fixed; top: auto; bottom: 0; left: 0; right: 0;
         border-radius: 0; margin: 0; z-index: 60;
         padding: 0.35rem var(--sp-2);
     }
-    /* wrap, don't scroll-or-clip: with the More panel open this row holds 9 items (4
-       always-visible + 4 More + the toggle) at icon-only widths, which doesn't fit one
-       line on a phone - nowrap + overflow-x:visible let the excess spill off-screen with
-       no way to reach or even see it. Wrapping keeps every pill on-screen and tappable. */
-    .nav-row { overflow-x: visible; flex-wrap: wrap; justify-content: space-around; }
+    /* wrap, don't scroll-or-clip: with the More group open this row holds 8 items (5
+       always-visible + 3 More + the toggle) at icon-only widths, which doesn't fit one
+       line on a phone - wrapping keeps every pill on-screen and tappable instead of
+       spilling off-screen unreachably. space-around gives a native tab-bar look; the
+       desktop/tablet default (.nav-tabs's own centered justify-content) isn't ideal at
+       this width since a bottom-docked bar should fill the full available width evenly. */
+    .nav-tabs { justify-content: space-around; }
     .nav-pill { flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.4rem; min-height: 44px; justify-content: center; }
     .nav-pill span { font-size: 0.6rem; }
     .nav-pill:not(.active) span { display: none; }
     .nav-more-label { display: none; }
     .nav-more-toggle { min-height: 44px; min-width: 44px; flex-direction: column; }
-    .nav-floating-toggle { display: none; }
     .toast-host, .toast { bottom: calc(60px + 0.75rem); }
     .mentor-compose-fab { bottom: calc(60px + 0.75rem); right: 1rem; }
+    .floating-composer { left: 0.75rem; right: 0.75rem; bottom: calc(60px + 0.75rem); width: auto; max-height: 60vh; }
 
     /* ---- Suggestions (highest priority): PDF stays primary/visible, just trimmed;
        the Original/AI-rewrite diff is now an expandable <details> (see App.jsx) so a

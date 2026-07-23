@@ -100,10 +100,14 @@ router.get("/dashboard", authenticateToken, requireRole("mentor"), (req, res) =>
         for (const u of parts) {
             if (!candidates[u.id]) {
                 const analyses = db.prepare(
-                    "SELECT id, score_total, provider, model, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
+                    "SELECT id, score_total, provider, model, attempt_type, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 20"
                 ).all(u.id)
 
-                const scores = analyses.map(a => a.score_total)
+                // a cover-letter-only attempt is never scored (score_total stays 0, not a real
+                // low score) - latest/best score should reflect only real resume-analysis
+                // attempts, while total_analyses still counts every attempt the candidate made
+                const scored = analyses.filter(a => a.attempt_type !== "cover_letter_only")
+                const scores = scored.map(a => a.score_total)
                 candidates[u.id] = {
                     id: u.id,
                     name: u.display_name,
@@ -201,7 +205,7 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
     const db = getDb()
     const attemptOf = attemptNumberMap(db, candidateId)
     const analyses = db.prepare(
-        "SELECT id, resume_id, score_total, provider, model, job_description, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
+        "SELECT id, resume_id, score_total, provider, model, job_description, attempt_type, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).all(candidateId)
     const snapshots = db.prepare(`
         SELECT rs.id, rs.resume_id, rs.analysis_id, rs.decisions_json, rs.score_total, rs.created_at
@@ -227,7 +231,7 @@ router.get("/candidates/:candidateId/analyses/:analysisId", authenticateToken, r
     }
     res.json({
         id: loaded.row.id, resume_id: loaded.row.resume_id, score: loaded.row.score_total, provider: loaded.row.provider,
-        model: loaded.row.model, created_at: loaded.row.created_at, results: loaded.results,
+        model: loaded.row.model, attempt_type: loaded.row.attempt_type || "resume_analysis", created_at: loaded.row.created_at, results: loaded.results,
     })
 })
 
@@ -413,8 +417,10 @@ router.get("/report", authenticateToken, requireRole("mentor"), (req, res) => {
         ).all(sess.id)
         for (const u of parts) {
             if (!candidates[u.id]) {
-                const analyses = db.prepare("SELECT score_total FROM analyses WHERE user_id = ? ORDER BY created_at DESC").all(u.id)
-                const scores = analyses.map(a => a.score_total)
+                const analyses = db.prepare("SELECT score_total, attempt_type FROM analyses WHERE user_id = ? ORDER BY created_at DESC").all(u.id)
+                // cover-letter-only attempts are never scored - keep them out of the score
+                // history/latest/best figures, same as the dashboard candidate list above
+                const scores = analyses.filter(a => a.attempt_type !== "cover_letter_only").map(a => a.score_total)
                 candidates[u.id] = { name: u.display_name, username: u.username, scores, total: analyses.length, latest: scores[0] || 0, best: scores.length ? Math.max(...scores) : 0 }
             }
         }

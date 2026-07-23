@@ -204,6 +204,27 @@ function initDb(db) {
         db.exec("ALTER TABLE job_matches ADD COLUMN content_hash TEXT DEFAULT ''")
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_job_matches_content_hash ON job_matches(content_hash)")
+
+    // the collaborative discussion system (candidate comments/questions + mentor replies on a
+    // specific rewrite suggestion) is built on this existing per-suggestion annotations table
+    // rather than a new one - section lets the mentor UI show which extracted section a thread
+    // belongs to without re-deriving it from the suggestion id every time
+    const annotationColumns = db.prepare("PRAGMA table_info(annotations)").all().map(col => col.name)
+    if (!annotationColumns.includes("section")) {
+        db.exec("ALTER TABLE annotations ADD COLUMN section TEXT DEFAULT ''")
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_annotations_analysis_suggestion ON annotations(analysis_id, suggestion_key)")
+
+    // Fast Cover Letter Workflow (Phase Y): a 'cover_letter_only' attempt skips the whole
+    // rewrite/scoring/keyword-gap pipeline and only ever calls the engine's single
+    // gen-cover-letter LLM call - it still gets a real (minimal) analyses row so it can
+    // reuse generated_documents/history/attempt-numbering unmodified rather than forking
+    // a parallel storage path for it
+    const analysisTypeColumns = db.prepare("PRAGMA table_info(analyses)").all().map(col => col.name)
+    if (!analysisTypeColumns.includes("attempt_type")) {
+        db.exec("ALTER TABLE analyses ADD COLUMN attempt_type TEXT NOT NULL DEFAULT 'resume_analysis'")
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_analyses_attempt_type ON analyses(user_id, attempt_type)")
 }
 
 const GUEST_RETENTION_HOURS = parseInt(process.env.GUEST_RETENTION_HOURS || "24", 10)
