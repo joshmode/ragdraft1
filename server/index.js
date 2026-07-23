@@ -13,6 +13,7 @@ import annotationRoutes from "./routes/annotations.js"
 import scraperRoutes from "./routes/scraper.js"
 import settingsRoutes from "./routes/settings.js"
 import feedbackRoutes from "./routes/feedback.js"
+import notificationRoutes from "./routes/notifications.js"
 import { getDb } from "./db.js"
 import { generalLimiter, authLimiter } from "./middleware/rateLimit.js"
 
@@ -81,6 +82,7 @@ app.use("/api/annotations", annotationRoutes)
 app.use("/api/scrape", scraperRoutes)
 app.use("/api/settings", settingsRoutes)
 app.use("/api/feedback", feedbackRoutes)
+app.use("/api/notifications", notificationRoutes)
 
 // unmatched /api/* routes stay JSON instead of falling through to the SPA catch-all
 app.use("/api", (_req, res) => {

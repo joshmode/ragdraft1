@@ -1355,6 +1355,35 @@ details.card > summary {
 .floating-composer-head h4 { font-family: var(--font-ui); font-size: 0.95rem; font-weight: 700; }
 .floating-composer .composer { margin-top: 0; }
 
+/* ---- Cover Letter Workflow refinement: shared notification badge, Resume/Cover Letter
+   toggle, and unread-row highlighting used across Attempt History, Mentor Feedback, the
+   mentor dashboard, and both CandidateDetail/CoverLetterWorkspace history tables ---- */
+.notif-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px; margin-left: 0.4rem;
+    border-radius: 999px; background: var(--c-error); color: #fff;
+    font-family: var(--font-ui); font-size: 0.68rem; font-weight: 700; line-height: 1;
+}
+.history-type-toggle { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: var(--sp-2); }
+.history-type-toggle button {
+    display: inline-flex; align-items: center; background: var(--c-bg); border: 1px solid var(--c-border);
+    border-radius: 999px; padding: 0.4rem 0.9rem; font-family: var(--font-ui); font-size: 0.82rem;
+    font-weight: 600; color: var(--c-text-muted); cursor: pointer; transition: all 0.15s;
+}
+.history-type-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+.history-type-toggle button.active .notif-badge { background: #fff; color: var(--c-error); }
+/* mentor side: pastel-red row background, cleared once the mentor opens the attempt */
+.mentor-history-table-wrap tr.history-row-unread-mentor { background: var(--c-error-bg); }
+.mentor-history-table-wrap tr.history-row-unread-mentor.mentor-history-row-open { background: rgba(139,92,246,0.07); }
+/* candidate side: light-blue underlined text, cleared once they open the attempt */
+.mentor-history-table-wrap tr.history-row-unread-user td { color: #3b82f6; text-decoration: underline; }
+.cover-letter-workspace-head { display: flex; gap: var(--sp-2); margin-bottom: 0.4rem; }
+.cover-letter-workspace-head .section-label { flex: 1; }
+.cover-letter-panes { align-items: stretch; margin-bottom: var(--sp-2); }
+.cover-letter-panes .doc-editor { min-height: 560px; }
+.cover-letter-submit-row { display: flex; gap: var(--sp-2); align-items: flex-end; }
+.cover-letter-comment { flex: 1; min-height: 44px; }
+
 @media (max-width: 900px) {
     .app-container { padding: 1rem; }
     .hero-wrap { border-radius: 0 0 18px 18px; padding: 2rem 1rem 1.25rem; }

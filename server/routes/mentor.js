@@ -1,7 +1,8 @@
 import { Router } from "express"
 import { getDb } from "../db.js"
 import { authenticateToken, requireRole } from "../middleware/auth.js"
-import { canAccessAnalysis, mentorSessionForCandidate } from "../access.js"
+import { canAccessAnalysis, mentorSessionForCandidate, mentorsForCandidate } from "../access.js"
+import { notify, notifyMany } from "../notifications.js"
 import crypto from "crypto"
 
 const router = Router()
@@ -205,7 +206,7 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
     const db = getDb()
     const attemptOf = attemptNumberMap(db, candidateId)
     const analyses = db.prepare(
-        "SELECT id, resume_id, score_total, provider, model, job_description, attempt_type, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
+        "SELECT id, resume_id, score_total, provider, model, job_description, attempt_type, results_json, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).all(candidateId)
     const snapshots = db.prepare(`
         SELECT rs.id, rs.resume_id, rs.analysis_id, rs.decisions_json, rs.score_total, rs.created_at
@@ -213,7 +214,25 @@ router.get("/candidates/:candidateId/history", authenticateToken, requireRole("m
         WHERE a.user_id = ? ORDER BY rs.created_at DESC LIMIT 100
     `).all(candidateId)
     res.json({
-        analyses: analyses.map(a => ({ ...a, attempt_number: attemptOf[a.id] || null })),
+        // same company/Job Match/Keyword Match metadata the candidate's own /analysis/history
+        // exposes, so the mentor-side Attempt History split and Cover Letter Compare Revisions
+        // company-grouping have the same data to work with - never sent as a raw results_json
+        // blob to keep this payload small
+        analyses: analyses.map(a => {
+            let results = {}
+            try { results = JSON.parse(a.results_json) } catch {}
+            const keywords = results.jd_keywords || []
+            const missing = results.missing_keywords || []
+            const keywordMatchPct = keywords.length ? Math.round((keywords.length - missing.length) / keywords.length * 100) : null
+            const { results_json, ...rest } = a
+            return {
+                ...rest,
+                attempt_number: attemptOf[a.id] || null,
+                company: results.company || "",
+                job_match_pct: typeof results.match_pct === "number" ? results.match_pct : null,
+                keyword_match_pct: keywordMatchPct,
+            }
+        }),
         revisions: snapshots.map(s => ({ ...s, decisions: JSON.parse(s.decisions_json || "{}") })),
     })
 })
@@ -278,6 +297,57 @@ router.get("/candidates/:candidateId/analyses/:analysisId/preview", authenticate
         md += `## ${sec}\n---\n` + lines.map(l => `- ${l}`).join("\n") + "\n\n"
     }
     res.json({ markdown: md, source: "applied_sections" })
+})
+
+// mirrors the CV /preview endpoint above but for a Cover Letter attempt's dedicated
+// workspace: the latest content the candidate actually saved (generated_documents is
+// append-only, "latest row wins" - see generation.js's /save), never the raw first-generated
+// text, so the mentor always reviews the candidate's current version (spec item 5)
+router.get("/candidates/:candidateId/analyses/:analysisId/cover-letter", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const analysisId = parseInt(req.params.analysisId)
+    const row = db.prepare("SELECT id FROM analyses WHERE id = ? AND user_id = ?").get(analysisId, candidateId)
+    if (!row) return res.status(404).json({ error: "Analysis not found." })
+    const generated = db.prepare(
+        "SELECT content FROM generated_documents WHERE analysis_id = ? AND document_type = 'cover_letter' ORDER BY created_at DESC, id DESC LIMIT 1"
+    ).get(analysisId)
+    res.json({ content: generated ? generated.content : "" })
+})
+
+// Compare Revisions for Cover Letters, scoped to attempts for the same company only (spec
+// item 3) - reuses the same diffLines() line-diff engine the resume Compare Revisions above
+// uses, just diffing saved cover-letter text instead of extracted resume sections
+router.get("/candidates/:candidateId/cover-letter-diff", authenticateToken, requireRole("mentor"), (req, res) => {
+    const candidateId = parseInt(req.params.candidateId)
+    if (!mentorSessionForCandidate(req.user.id, candidateId, { activeOnly: false })) {
+        return res.status(404).json({ error: "Candidate not found in your review sessions." })
+    }
+    const db = getDb()
+    const from = db.prepare("SELECT * FROM analyses WHERE id = ? AND user_id = ?").get(parseInt(req.query.from), candidateId)
+    const to = db.prepare("SELECT * FROM analyses WHERE id = ? AND user_id = ?").get(parseInt(req.query.to), candidateId)
+    if (!from || !to) return res.status(404).json({ error: "Analysis not found." })
+    if (from.attempt_type !== "cover_letter_only" || to.attempt_type !== "cover_letter_only") {
+        return res.status(400).json({ error: "Both attempts must be Cover Letter attempts to compare." })
+    }
+    let fromResults = {}, toResults = {}
+    try { fromResults = JSON.parse(from.results_json) } catch {}
+    try { toResults = JSON.parse(to.results_json) } catch {}
+    const fromCompany = String(fromResults.company || "").trim().toLowerCase()
+    const toCompany = String(toResults.company || "").trim().toLowerCase()
+    if (fromCompany !== toCompany) {
+        return res.status(400).json({ error: "Cover letters must be for the same company to compare." })
+    }
+    const fromDoc = db.prepare("SELECT content FROM generated_documents WHERE analysis_id = ? AND document_type = 'cover_letter' ORDER BY created_at DESC, id DESC LIMIT 1").get(from.id)
+    const toDoc = db.prepare("SELECT content FROM generated_documents WHERE analysis_id = ? AND document_type = 'cover_letter' ORDER BY created_at DESC, id DESC LIMIT 1").get(to.id)
+    res.json({
+        from: { id: from.id, company: fromResults.company || "", created_at: from.created_at },
+        to: { id: to.id, company: toResults.company || "", created_at: to.created_at },
+        diff: diffLines((fromDoc?.content || "").split("\n"), (toDoc?.content || "").split("\n")),
+    })
 })
 
 // pr-style per-section diff between two analyses of the same candidate
@@ -354,8 +424,9 @@ router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) =>
     // just the parsed one) also makes sure a non-numeric analysis_id is rejected instead of
     // silently parsed to NaN and treated as "no analysis".
     const analysisId = analysis_id ? parseInt(analysis_id) : null
+    let analysisRow = null
     if (analysis_id) {
-        const analysisRow = analysisId ? canAccessAnalysis(analysisId, req.user) : null
+        analysisRow = analysisId ? canAccessAnalysis(analysisId, req.user) : null
         if (!analysisRow || analysisRow.user_id !== candidateId) {
             return res.status(404).json({ error: "Analysis not found." })
         }
@@ -369,6 +440,7 @@ router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) =>
         session.id, req.user.id, candidateId, analysisId, String(suggestion_key || ""),
         type, String(section || ""), String(original_text || ""), String(suggested_text || ""), String(comment || ""),
     )
+    notify(candidateId, { analysisId, attemptType: analysisRow?.attempt_type || "resume_analysis", eventType: "mentor_feedback" })
     res.status(201).json({ id: row.lastInsertRowid })
 })
 
@@ -378,13 +450,15 @@ router.get("/feedback", authenticateToken, requireRole("mentor"), (req, res) => 
     const candidateId = req.query.candidate_id ? parseInt(req.query.candidate_id) : null
     const rows = candidateId
         ? db.prepare(`
-            SELECT mf.*, u.display_name AS candidate_name FROM mentor_feedback mf
+            SELECT mf.*, u.display_name AS candidate_name, a.attempt_type FROM mentor_feedback mf
             JOIN users u ON u.id = mf.candidate_id
+            LEFT JOIN analyses a ON a.id = mf.analysis_id
             WHERE mf.mentor_id = ? AND mf.candidate_id = ? ORDER BY mf.created_at DESC LIMIT 200
           `).all(req.user.id, candidateId)
         : db.prepare(`
-            SELECT mf.*, u.display_name AS candidate_name FROM mentor_feedback mf
+            SELECT mf.*, u.display_name AS candidate_name, a.attempt_type FROM mentor_feedback mf
             JOIN users u ON u.id = mf.candidate_id
+            LEFT JOIN analyses a ON a.id = mf.analysis_id
             WHERE mf.mentor_id = ? ORDER BY mf.created_at DESC LIMIT 200
           `).all(req.user.id)
     const attemptCache = {}
@@ -399,8 +473,9 @@ router.get("/feedback", authenticateToken, requireRole("mentor"), (req, res) => 
 router.get("/feedback/inbox", authenticateToken, (req, res) => {
     const db = getDb()
     const rows = db.prepare(`
-        SELECT mf.*, u.display_name AS mentor_name FROM mentor_feedback mf
+        SELECT mf.*, u.display_name AS mentor_name, a.attempt_type FROM mentor_feedback mf
         JOIN users u ON u.id = mf.mentor_id
+        LEFT JOIN analyses a ON a.id = mf.analysis_id
         WHERE mf.candidate_id = ? ORDER BY mf.created_at DESC LIMIT 200
     `).all(req.user.id)
     const attemptOf = attemptNumberMap(db, req.user.id)

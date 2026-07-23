@@ -225,6 +225,28 @@ function initDb(db) {
         db.exec("ALTER TABLE analyses ADD COLUMN attempt_type TEXT NOT NULL DEFAULT 'resume_analysis'")
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_analyses_attempt_type ON analyses(user_id, attempt_type)")
+
+    // Shared notification system (Cover Letter Workflow refinement): one row per unread-able
+    // event, always pointed at the Attempt it's about - the same table drives unread badges
+    // for BOTH Resume Analysis and Cover Letter workflows (and both mentor and candidate
+    // recipients) rather than forking a parallel read-state mechanism per workflow.
+    // attempt_type is denormalized from analyses.attempt_type at write time purely so the
+    // summary endpoint can group by workflow without a join for every row.
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            analysis_id INTEGER,
+            attempt_type TEXT NOT NULL DEFAULT 'resume_analysis',
+            event_type TEXT NOT NULL,
+            read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (analysis_id) REFERENCES analyses(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read);
+        CREATE INDEX IF NOT EXISTS idx_notifications_analysis ON notifications(analysis_id);
+    `)
 }
 
 const GUEST_RETENTION_HOURS = parseInt(process.env.GUEST_RETENTION_HOURS || "24", 10)
@@ -258,6 +280,7 @@ function deleteGuestUser(db, userId) {
         db.prepare("DELETE FROM job_matches WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
         db.prepare("DELETE FROM evaluation_feedback WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
         db.prepare("DELETE FROM mentor_feedback WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR candidate_id = ? OR mentor_id = ?").run(userId, userId, userId)
+        db.prepare("DELETE FROM notifications WHERE analysis_id IN (SELECT id FROM analyses WHERE user_id = ?) OR user_id = ?").run(userId, userId)
         db.prepare("DELETE FROM session_participants WHERE user_id = ?").run(userId)
         db.prepare("DELETE FROM user_api_keys WHERE user_id = ?").run(userId)
         db.prepare("DELETE FROM analysis_jobs WHERE user_id = ? OR resume_id IN (SELECT id FROM resumes WHERE user_id = ?)").run(userId, userId)

@@ -62,8 +62,12 @@ const PIPELINE_STEPS = [
 function formatDuration(ms) {
     const totalSeconds = ms / 1000
     if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = Math.round(totalSeconds % 60)
+    // round the whole duration first, then split into minutes/seconds - rounding each part
+    // independently (Math.floor for minutes, Math.round for the leftover seconds) can carry
+    // the seconds up to 60 (e.g. 119.6s -> "1 min 60 s" instead of "2 min 0 s")
+    const rounded = Math.round(totalSeconds)
+    const minutes = Math.floor(rounded / 60)
+    const seconds = rounded % 60
     return `${minutes} min ${seconds} s`
 }
 
@@ -140,6 +144,28 @@ function base64ToBlob(b64, type = "application/pdf") {
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     return new Blob([bytes], { type })
+}
+
+const NOTIFICATION_SUMMARY_DEFAULT = { unread_total: 0, by_attempt_type: {}, by_analysis_id: {}, by_candidate_id: {}, by_candidate_and_type: {} }
+
+// shared read-state polling for the notification badges (nav, sidebar, history rows, mentor
+// dashboard) - one endpoint drives all of them (see server/routes/notifications.js), fetched
+// once on mount/login and re-polled on an interval since there's no push/websocket channel in
+// this app. `enabled` should be falsy until there's a logged-in user to fetch for.
+function useNotificationSummary(enabled) {
+    const [summary, setSummary] = useState(NOTIFICATION_SUMMARY_DEFAULT)
+    function refresh() {
+        if (!enabled) return
+        api.get("/notifications/summary").then(res => setSummary(res.data)).catch(() => {})
+    }
+    useEffect(() => {
+        if (!enabled) { setSummary(NOTIFICATION_SUMMARY_DEFAULT); return undefined }
+        refresh()
+        const id = setInterval(refresh, 30000)
+        return () => clearInterval(id)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [enabled])
+    return [summary, refresh]
 }
 
 function waitForAnalysis(jobId) {
@@ -271,7 +297,7 @@ function AuthBar({ user, onLogout }) {
 // pressing the expand arrow reveals More as a genuine second row below it, height-animated
 // in rather than fighting for space in the same row (which used to let the always-visible
 // tabs themselves wrap onto a second line and made the "collapsed" bar look permanently tall).
-function TopNav({ view, setView }) {
+function TopNav({ view, setView, badges = {} }) {
     const [moreOpen, setMoreOpen] = useState(false)
 
     return <nav className="top-nav">
@@ -282,7 +308,7 @@ function TopNav({ view, setView }) {
             <div className="nav-tabs">
                 {ALWAYS_NAV.map(({ key, icon: Icon }) => (
                     <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)}>
-                        <Icon size={14} /><span>{key}</span>
+                        <Icon size={14} /><span>{key}</span><NotificationBadge count={badges[key]} />
                     </button>
                 ))}
             </div>
@@ -294,7 +320,7 @@ function TopNav({ view, setView }) {
             <span className="nav-more-label">More</span>
             {MORE_NAV.map(({ key, icon: Icon }) => (
                 <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)} tabIndex={moreOpen ? 0 : -1}>
-                    <Icon size={14} /><span>{key}</span>
+                    <Icon size={14} /><span>{key}</span><NotificationBadge count={badges[key]} />
                 </button>
             ))}
         </div>
@@ -573,22 +599,76 @@ function AnalysisRequiredGate({ icon: Icon, message, onAnalyse, busy }) {
     </div>
 }
 
+// unread notification badge - shared by every nav/sidebar/history-row spot that needs one,
+// so the red-circle/pastel-highlight visual language stays identical everywhere it appears
+function NotificationBadge({ count }) {
+    if (!count) return null
+    return <span className="notif-badge">{count > 99 ? "99+" : count}</span>
+}
+
+// Cover Letter attempts number sequentially PER COMPANY, restarting whenever the company
+// changes (Google #1/#2/#3, then OpenAI #1) - unlike Resume Analysis attempts, which number
+// sequentially across the whole history. `list` is DESC by created_at (server order); grouping
+// by a normalized company key, then numbering each group ascending (oldest = #1), keeps this
+// stable even as new attempts for an existing company are added later.
+function numberCoverLetterAttempts(list) {
+    const groups = {}
+    for (const item of list) {
+        const key = (item.company || "").trim().toLowerCase() || "__unknown__"
+        ;(groups[key] = groups[key] || []).push(item)
+    }
+    const numberOf = {}
+    for (const items of Object.values(groups)) {
+        const ascending = [...items].reverse()
+        ascending.forEach((item, i) => { numberOf[item.id] = i + 1 })
+    }
+    return numberOf
+}
+
 // Phase Y item 65: lets a candidate get back to any previous attempt - resume-analysis or
-// cover-letter-only alike, in one unified chronological list (same attempt numbering the
-// mentor side already uses) - reuses the same table treatment/polish as the mentor's own
-// Analysis History table for visual consistency with the rest of the app.
-function AttemptHistory({ history, onOpenAttempt }) {
+// cover-letter-only alike. Cover Letter Workflow refinement: the two workflows now get their
+// own toggle, numbering scheme, and metadata columns rather than one mixed chronological list.
+function AttemptHistory({ history, onOpenAttempt, unreadByAnalysisId = {} }) {
+    const [tab, setTab] = useState("resume")
+    const resumeAttempts = useMemo(() => history.filter(h => h.attempt_type !== "cover_letter_only"), [history])
+    const coverLetterAttempts = useMemo(() => history.filter(h => h.attempt_type === "cover_letter_only"), [history])
+    const clNumberOf = useMemo(() => numberCoverLetterAttempts(coverLetterAttempts), [coverLetterAttempts])
+    const resumeUnread = resumeAttempts.some(h => unreadByAnalysisId[h.id])
+    const coverLetterUnread = coverLetterAttempts.some(h => unreadByAnalysisId[h.id])
+    const visible = tab === "resume" ? resumeAttempts : coverLetterAttempts
+
     return <section>
         <h2 className="view-title">Attempt History</h2>
-        {!history.length && <p className="muted">No attempts yet - analyse a resume or generate a cover letter to start building your history.</p>}
-        {history.length > 0 && <div className="card mentor-history-table-wrap"><table><thead><tr><th>Attempt</th><th>Type</th><th>Score</th><th>Date</th><th /></tr></thead><tbody>
-            {history.map((item, index) => <tr key={item.id}>
-                <td>#{history.length - index}</td>
-                <td><span className={`status-chip ${item.attempt_type === "cover_letter_only" ? "" : "status-accepted"}`}>{item.attempt_type === "cover_letter_only" ? "Cover Letter Only" : "Resume Analysis"}</span></td>
-                <td>{item.attempt_type === "cover_letter_only" ? "—" : `${item.score}/100`}</td>
-                <td>{formatDateTime(item.created_at)}</td>
-                <td><button className="btn-secondary btn-small" onClick={() => onOpenAttempt(item.id)}>Open</button></td>
-            </tr>)}
+        <div className="history-type-toggle">
+            <button className={tab === "resume" ? "active" : ""} onClick={() => setTab("resume")}>Resume Analysis{resumeUnread && <NotificationBadge count={resumeAttempts.filter(h => unreadByAnalysisId[h.id]).length} />}</button>
+            <button className={tab === "cover_letter" ? "active" : ""} onClick={() => setTab("cover_letter")}>Cover Letters{coverLetterUnread && <NotificationBadge count={coverLetterAttempts.filter(h => unreadByAnalysisId[h.id]).length} />}</button>
+        </div>
+        {!visible.length && <p className="muted">{tab === "resume" ? "No resume analyses yet - analyse a resume to start building your history." : "No cover letters yet - generate one to start building your history."}</p>}
+        {visible.length > 0 && <div className="card mentor-history-table-wrap"><table><thead><tr>
+            {tab === "resume"
+                ? <><th>Attempt</th><th>Score</th><th>Date</th><th /></>
+                : <><th>Company</th><th>Attempt</th><th>Job Match</th><th>Keyword Match</th><th>Date</th><th /></>}
+        </tr></thead><tbody>
+            {tab === "resume" && resumeAttempts.map((item, index) => {
+                const unread = !!unreadByAnalysisId[item.id]
+                return <tr key={item.id} className={unread ? "history-row-unread-user" : ""}>
+                    <td>#{resumeAttempts.length - index}</td>
+                    <td>{item.score}/100</td>
+                    <td>{formatDateTime(item.created_at)}</td>
+                    <td><button className="btn-secondary btn-small" onClick={() => onOpenAttempt(item.id)}>Open</button></td>
+                </tr>
+            })}
+            {tab === "cover_letter" && coverLetterAttempts.map(item => {
+                const unread = !!unreadByAnalysisId[item.id]
+                return <tr key={item.id} className={unread ? "history-row-unread-user" : ""}>
+                    <td><Building2 size={12} /> {item.company || "Company not detected"}</td>
+                    <td>#{clNumberOf[item.id]}</td>
+                    <td>{item.job_match_pct != null ? `${item.job_match_pct}%` : "—"}</td>
+                    <td>{item.keyword_match_pct != null ? `${item.keyword_match_pct}%` : "—"}</td>
+                    <td>{formatDateTime(item.created_at)}</td>
+                    <td><button className="btn-secondary btn-small" onClick={() => onOpenAttempt(item.id)}>Open</button></td>
+                </tr>
+            })}
         </tbody></table></div>}
     </section>
 }
@@ -717,8 +797,11 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
         }).catch(() => setMentorEdits({}))
     }, [analysisId])
 
-    // reset to the first suggestion on a fresh analysis instead of a stale index
-    useEffect(() => { setActive(0) }, [analysisId])
+    // reset to the first suggestion on a fresh analysis instead of a stale index - also
+    // clears any decision-save error left over from the previous attempt, since this
+    // component can stay mounted across a reanalysis (whenever the user reanalyses while
+    // already on the Suggestions tab, the view doesn't change so this never remounts)
+    useEffect(() => { setActive(0); setError("") }, [analysisId])
 
     useEffect(() => {
         let cancelled = false
@@ -1218,13 +1301,25 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
     const [comment, setComment] = useState("")
     const [status, setStatus] = useState("")
 
+    // CandidateDetail keeps a single FeedbackComposer instance mounted and just swaps its
+    // `prefill` prop when the mentor jumps from editing one suggestion/section straight to
+    // another without closing the composer first (startEdit/startSectionEdit never unmount
+    // it) - so this must also clear the draft-only fields (they aren't derived from prefill
+    // and would otherwise leak the previous suggestion's typed text into the new one's
+    // submission). Keyed on prefill?.key (a stable id), not the prefill object itself, so an
+    // unrelated parent re-render (which recreates the inline prefill object every time) can't
+    // wipe out an in-progress draft for the SAME suggestion.
     useEffect(() => {
         if (prefill) {
             setType(prefill.type || "comment")
             setSection(prefill.section || "")
             setOriginalText(prefill.original || "")
+            setSuggestedText("")
+            setComment("")
+            setStatus("")
         }
-    }, [prefill])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [prefill?.key])
 
     async function send() {
         setStatus("")
@@ -1271,7 +1366,7 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
     </div>
 }
 
-function CandidateDetail({ candidate, onBack }) {
+function CandidateDetail({ candidate, onBack, notifSummary, refreshNotifications }) {
     const [history, setHistory] = useState(null)
     const [analysis, setAnalysis] = useState(null)
     const [diffFrom, setDiffFrom] = useState("")
@@ -1279,6 +1374,9 @@ function CandidateDetail({ candidate, onBack }) {
     const [diff, setDiff] = useState(null)
     const [sent, setSent] = useState([])
     const [error, setError] = useState("")
+    // Cover Letter Workflow refinement: Resume Analysis and Cover Letters are now separate
+    // first-class workflows with their own history/workspace, not one mixed attempt list
+    const [historyTab, setHistoryTab] = useState("resume")
     // Analysis History starts expanded; opening a resume auto-collapses it (item 57)
     const [historyOpen, setHistoryOpen] = useState(true)
     // More menu (Comment History / Accepted AI Suggestions / Cover Letters)
@@ -1326,6 +1424,8 @@ function CandidateDetail({ candidate, onBack }) {
             setActiveComposerKey(null)
             setActiveSectionEdit(null)
             previewModeBeforeEdit.current = null
+            // "viewing the attempt clears unread state" applies to mentors too
+            api.post("/notifications/mark-read", { analysis_id: id }).then(refreshNotifications).catch(() => {})
         } catch (err) { setError(getError(err)) }
     }
 
@@ -1436,6 +1536,14 @@ function CandidateDetail({ candidate, onBack }) {
             const res = await api.get(`/mentor/candidates/${candidate.id}/diff?from=${diffFrom}&to=${diffTo}`)
             setDiff(res.data)
             setAnalysis(null)
+            // switching to the diff view hides the composer (editingItem/rewrites both go
+            // empty once analysis is null), but leaving activeComposerKey/activeSectionEdit
+            // set keeps the "Compose general feedback" FAB hidden (its render condition is
+            // `!activeComposerKey && !activeSectionEdit`) until an analysis is reopened -
+            // same cleanup openAnalysis() already does when switching analyses
+            setActiveComposerKey(null)
+            setActiveSectionEdit(null)
+            previewModeBeforeEdit.current = null
         } catch (err) { setError(getError(err)) }
     }
 
@@ -1477,7 +1585,10 @@ function CandidateDetail({ candidate, onBack }) {
         }
     }
 
-    const analyses = history?.analyses || []
+    const allAnalyses = history?.analyses || []
+    const analyses = allAnalyses.filter(a => a.attempt_type !== "cover_letter_only")
+    const coverLetterAttempts = allAnalyses.filter(a => a.attempt_type === "cover_letter_only")
+    const candidateBadges = notifSummary?.by_candidate_and_type?.[candidate.id] || {}
     const rewrites = analysis?.results?.rewrites || {}
     const decisions = analysis?.results?.decisions || {}
     const sections = analysis?.results?.sections || {}
@@ -1510,10 +1621,14 @@ function CandidateDetail({ candidate, onBack }) {
             <button className="btn-secondary" onClick={onBack}>← All candidates</button>
             <h3 className="detail-title">{candidate.name}</h3>
             {/* item 71: the More toggle lives beside All Candidates now, not beneath the PDF */}
-            {analysis && !diff && <button className="btn-secondary btn-small mentor-more-toggle-btn" onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} More</button>}
+            {historyTab === "resume" && analysis && !diff && <button className="btn-secondary btn-small mentor-more-toggle-btn" onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} More</button>}
         </div>
         {error && <p className="warning-strip">{error}</p>}
-        {analysis && !diff && moreOpen && <div className="card mentor-more-panel">
+        <div className="history-type-toggle">
+            <button className={historyTab === "resume" ? "active" : ""} onClick={() => setHistoryTab("resume")}>Resume Analysis<NotificationBadge count={candidateBadges.resume_analysis} /></button>
+            <button className={historyTab === "cover_letter" ? "active" : ""} onClick={() => { cancelEdit(); setMoreOpen(false); setHistoryTab("cover_letter") }}>Cover Letters<NotificationBadge count={candidateBadges.cover_letter_only} /></button>
+        </div>
+        {historyTab === "resume" && analysis && !diff && moreOpen && <div className="card mentor-more-panel">
             <div className="mentor-more-tabs">
                 <button className={moreTab === "comments" ? "active" : ""} onClick={() => openMoreTab("comments")}>Comment History</button>
                 <button className={moreTab === "accepted" ? "active" : ""} onClick={() => openMoreTab("accepted")}>Accepted AI Suggestions</button>
@@ -1549,12 +1664,13 @@ function CandidateDetail({ candidate, onBack }) {
                 </div>
             )) : <p className="muted">No cover letters generated yet.</p>)}
         </div>}
-        <div className="two-col">
+        {historyTab === "cover_letter" && <CoverLetterWorkspace candidate={candidate} attempts={coverLetterAttempts} sent={sent} onSent={load} unreadByAnalysisId={notifSummary?.by_analysis_id} />}
+        {historyTab === "resume" && <div className="two-col">
             <div>
                 <details className="card mentor-history-card" open={historyOpen} onToggle={e => setHistoryOpen(e.currentTarget.open)}>
                     <summary>Analysis History {historyOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</summary>
                     <div className="mentor-history-table-wrap"><table><thead><tr><th>Date</th><th>Score</th><th>Model</th><th /></tr></thead><tbody>
-                        {analyses.map(a => <tr key={a.id} className={analysis?.id === a.id ? "mentor-history-row-open" : ""}>
+                        {analyses.map(a => <tr key={a.id} className={`${analysis?.id === a.id ? "mentor-history-row-open" : ""} ${notifSummary?.by_analysis_id?.[a.id] ? "history-row-unread-mentor" : ""}`}>
                             <td>{formatDateTime(a.created_at)}</td>
                             <td style={{ color: getScoreCfg(a.score_total).color, fontWeight: 700 }}>{a.score_total}</td>
                             <td>{a.provider}{a.model ? ` / ${a.model}` : ""}</td>
@@ -1640,10 +1756,10 @@ function CandidateDetail({ candidate, onBack }) {
                 </>}
                 {!analysis && !diff && <div className="card muted">Open an analysis or compare two revisions to see details here.</div>}
             </div>
-        </div>
+        </div>}
 
-        {!activeComposerKey && !activeSectionEdit && <button className="mentor-compose-fab" onClick={() => setComposeOpen(true)} title="Compose general feedback"><PenSquare size={20} /></button>}
-        {composeOpen && createPortal(<div className="modal-overlay" onClick={() => setComposeOpen(false)}>
+        {historyTab === "resume" && !activeComposerKey && !activeSectionEdit && <button className="mentor-compose-fab" onClick={() => setComposeOpen(true)} title="Compose general feedback"><PenSquare size={20} /></button>}
+        {historyTab === "resume" && composeOpen && createPortal(<div className="modal-overlay" onClick={() => setComposeOpen(false)}>
             <div className="modal-panel" onClick={e => e.stopPropagation()}>
                 <div className="modal-head">
                     <h3 className="modal-title">General Feedback</h3>
@@ -1691,11 +1807,158 @@ function CandidateDetail({ candidate, onBack }) {
     </section>
 }
 
+// dedicated Cover Letter workspace (spec item 3) - deliberately its own component rather than
+// a branch inside CandidateDetail's resume-analysis two-col, since almost nothing is shared:
+// no rewrites/sections/decisions, a plain editable document instead of a bullet-by-bullet
+// review, and Compare Revisions scoped to one company instead of the whole candidate.
+// Reuses what genuinely IS shared - DiffView, the resume PDF fetch, formatDateTime, toast.
+function CoverLetterWorkspace({ candidate, attempts, sent, onSent, unreadByAnalysisId = {} }) {
+    const [openId, setOpenId] = useState(null)
+    const [content, setContent] = useState("")
+    const [baseline, setBaseline] = useState("")
+    const [comment, setComment] = useState("")
+    const [pdfUrl, setPdfUrl] = useState("")
+    const [diffFrom, setDiffFrom] = useState("")
+    const [diffTo, setDiffTo] = useState("")
+    const [diff, setDiff] = useState(null)
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState("")
+
+    const clNumberOf = useMemo(() => numberCoverLetterAttempts(attempts), [attempts])
+    const open = attempts.find(a => a.id === openId)
+    const sameCompanyAttempts = open
+        ? attempts.filter(a => (a.company || "").trim().toLowerCase() === (open.company || "").trim().toLowerCase())
+        : []
+
+    async function openAttempt(id) {
+        setDiff(null)
+        setDiffFrom(""); setDiffTo("")
+        setOpenId(id)
+        setError("")
+        try {
+            const res = await api.get(`/mentor/candidates/${candidate.id}/analyses/${id}/cover-letter`)
+            const savedContent = res.data.content || ""
+            // Mentor Revision Cycle (spec item 7): if the mentor already left a suggested
+            // rewrite for this attempt (accepted, dismissed, or still open), reopening it
+            // resumes editing from THAT draft rather than the plain saved content, so a
+            // dismissed suggestion never forces the mentor to start over from scratch
+            const mine = sent
+                .filter(f => f.analysis_id === id && f.suggestion_key === `cover_letter:${id}`)
+                .sort((a, b) => parseServerTimestamp(b.updated_at || b.created_at) - parseServerTimestamp(a.updated_at || a.created_at))[0]
+            setBaseline(savedContent)
+            setContent(mine ? mine.suggested_text : savedContent)
+            setComment("")
+            api.post("/notifications/mark-read", { analysis_id: id }).catch(() => {})
+        } catch (err) { setError(getError(err)) }
+    }
+
+    // the resume this cover letter was written for - plain, unhighlighted, no AI/review
+    // annotations (spec item 3), unlike the resume-analysis workspace's highlighted PDF
+    useEffect(() => {
+        if (!open) { setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev); return "" }); return undefined }
+        let cancelled = false
+        let createdUrl = ""
+        api.get(`/mentor/candidates/${candidate.id}/resumes/${open.resume_id}/file`, { responseType: "blob" }).then(res => {
+            if (cancelled) return
+            createdUrl = URL.createObjectURL(res.data)
+            setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev); return createdUrl })
+        }).catch(() => { if (!cancelled) setPdfUrl("") })
+        return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl) }
+    }, [open?.resume_id, candidate.id])
+
+    async function submit() {
+        if (!content.trim() || !open) return
+        setBusy(true)
+        setError("")
+        try {
+            await api.post("/mentor/feedback", {
+                candidate_id: candidate.id,
+                analysis_id: open.id,
+                suggestion_key: `cover_letter:${open.id}`,
+                feedback_type: "edit",
+                section: "Cover Letter",
+                original_text: baseline,
+                suggested_text: content,
+                comment,
+            })
+            setBaseline(content)
+            setComment("")
+            toast("Cover letter feedback sent to candidate")
+            onSent()
+        } catch (err) { setError(getError(err)) } finally { setBusy(false) }
+    }
+
+    async function runDiff() {
+        if (!diffFrom || !diffTo) return
+        try {
+            const res = await api.get(`/mentor/candidates/${candidate.id}/cover-letter-diff?from=${diffFrom}&to=${diffTo}`)
+            setDiff(res.data)
+        } catch (err) { setError(getError(err)) }
+    }
+
+    return <div className="two-col">
+        <div>
+            <details className="card mentor-history-card" open>
+                <summary>Cover Letter History</summary>
+                <div className="mentor-history-table-wrap"><table><thead><tr><th>Company</th><th>Attempt</th><th>Job Match</th><th>Keyword Match</th><th>Date</th><th /></tr></thead><tbody>
+                    {attempts.map(a => <tr key={a.id} className={`${openId === a.id ? "mentor-history-row-open" : ""} ${unreadByAnalysisId[a.id] ? "history-row-unread-mentor" : ""}`}>
+                        <td><Building2 size={12} /> {a.company || "Company not detected"}</td>
+                        <td>#{clNumberOf[a.id]}</td>
+                        <td>{a.job_match_pct != null ? `${a.job_match_pct}%` : "—"}</td>
+                        <td>{a.keyword_match_pct != null ? `${a.keyword_match_pct}%` : "—"}</td>
+                        <td>{formatDateTime(a.created_at)}</td>
+                        <td><button className="btn-secondary btn-small" onClick={() => openAttempt(a.id)}>Open</button></td>
+                    </tr>)}
+                    {!attempts.length && <tr><td colSpan={6} className="muted">No cover letters yet.</td></tr>}
+                </tbody></table></div>
+            </details>
+            <span className="section-label">Compare Revisions</span>
+            <p className="muted">Only attempts for the same company as the one you have open can be compared.</p>
+            <div className="card">
+                <div className="composer-row">
+                    <select className="input-field" value={diffFrom} onChange={e => setDiffFrom(e.target.value)} disabled={!open}>
+                        <option value="">Before…</option>
+                        {sameCompanyAttempts.map(a => <option key={a.id} value={a.id}>#{clNumberOf[a.id]} · {formatDateTime(a.created_at)}</option>)}
+                    </select>
+                    <select className="input-field" value={diffTo} onChange={e => setDiffTo(e.target.value)} disabled={!open}>
+                        <option value="">After…</option>
+                        {sameCompanyAttempts.map(a => <option key={a.id} value={a.id}>#{clNumberOf[a.id]} · {formatDateTime(a.created_at)}</option>)}
+                    </select>
+                    <button className="btn-primary" onClick={runDiff} disabled={!diffFrom || !diffTo || diffFrom === diffTo}>Compare</button>
+                </div>
+            </div>
+        </div>
+        <div>
+            {error && <p className="warning-strip">{error}</p>}
+            {diff && <>
+                <span className="section-label">Cover Letter Diff · #{clNumberOf[diff.from.id]} ({diff.from.company}) → #{clNumberOf[diff.to.id]}</span>
+                <DiffView diff={diff.diff} />
+            </>}
+            {!diff && open && <>
+                <div className="cover-letter-workspace-head">
+                    <span className="section-label">Cover Letter Preview</span>
+                    <span className="section-label">Original Resume</span>
+                </div>
+                <div className="two-col cover-letter-panes">
+                    <textarea className="input-field doc-editor mentor-preview-editor" value={content} onChange={e => setContent(e.target.value)} />
+                    {pdfUrl ? <div className="pdf-shell"><iframe className="pdf-frame" src={pdfUrl} title="Candidate's original resume" /></div> : <div className="card muted">Source preview is available for PDF uploads only.</div>}
+                </div>
+                <div className="mentor-preview-actions cover-letter-submit-row">
+                    <textarea className="input-field cover-letter-comment" value={comment} onChange={e => setComment(e.target.value)} placeholder="Optional comment for the candidate" />
+                    <button className="btn-primary" disabled={busy || !content.trim()} onClick={submit}><Check size={15} /> Submit</button>
+                </div>
+            </>}
+            {!diff && !open && <div className="card muted">Open a cover letter attempt to review it.</div>}
+        </div>
+    </div>
+}
+
 function MentorDashboard() {
     const [data, setData] = useState(null)
     const [error, setError] = useState("")
     const [openCandidate, setOpenCandidate] = useState(null)
     const [newCode, setNewCode] = useState("")
+    const [notifSummary, refreshNotifications] = useNotificationSummary(true)
 
     async function load() {
         try { setData((await api.get("/mentor/dashboard")).data) } catch (err) { setError(getError(err)) }
@@ -1719,7 +1982,7 @@ function MentorDashboard() {
 
     if (error) return <p className="warning-strip">{error}</p>
     if (!data) return <p className="muted">Loading mentor dashboard...</p>
-    if (openCandidate) return <CandidateDetail candidate={openCandidate} onBack={() => setOpenCandidate(null)} />
+    if (openCandidate) return <CandidateDetail candidate={openCandidate} onBack={() => { setOpenCandidate(null); refreshNotifications() }} notifSummary={notifSummary} refreshNotifications={refreshNotifications} />
 
     return <section>
         <div className="detail-head">
@@ -1738,7 +2001,7 @@ function MentorDashboard() {
         <span className="section-label">Candidates</span>
         <div className="card mentor-table"><table><thead><tr><th>Candidate</th><th>Analyses</th><th>Latest</th><th>Best</th><th /></tr></thead><tbody>
             {data.candidates.map(candidate => <tr key={candidate.id}>
-                <td>{candidate.name}</td>
+                <td>{candidate.name}<NotificationBadge count={notifSummary.by_candidate_id[candidate.id]} /></td>
                 <td>{candidate.total_analyses}</td>
                 <td style={{ color: getScoreCfg(candidate.latest_score).color, fontWeight: 700 }}>{candidate.latest_score}</td>
                 <td>{candidate.best_score}</td>
@@ -1787,12 +2050,19 @@ function formatDateTime(value) {
 // automatically restores that attempt's feedback to the active view (items 7 and 8) - both
 // fall out of the same exact-match filter for free. Before any attempt exists at all
 // (analysisId is null), it falls back to the old "most recent attempt with feedback" view.
-function FeedbackInbox({ analysisId }) {
+function FeedbackInbox({ analysisId, attemptType, unreadByAttemptType = {} }) {
     const [items, setItems] = useState(null)
     const [error, setError] = useState("")
     // guards against a double-click firing two Accept/Dismiss requests for the same item
     // before the first one's re-fetch lands, which could otherwise flicker between states
     const [busyId, setBusyId] = useState(null)
+    // spec item 8: feedback filtering follows whichever attempt is currently open, but stays
+    // manually switchable too (e.g. browsing Cover Letter feedback while a Resume attempt is
+    // the active one) - so it's real state, just re-synced whenever the open attempt changes
+    const [tab, setTab] = useState(attemptType === "cover_letter_only" ? "cover_letter" : "resume")
+    useEffect(() => {
+        if (attemptType) setTab(attemptType === "cover_letter_only" ? "cover_letter" : "resume")
+    }, [analysisId, attemptType])
 
     async function load() {
         try { setItems((await api.get("/mentor/feedback/inbox")).data) } catch (err) { setError(getError(err)) }
@@ -1813,9 +2083,10 @@ function FeedbackInbox({ analysisId }) {
     if (!items.length) return <div className="card muted">No mentor feedback yet. Join a review session from the sidebar, and your mentor's comments and suggested edits will appear here.</div>
 
     const activeAttempt = analysisId || items.reduce((max, f) => (f.attempt_number || 0) > (max?.attempt_number || 0) ? f : max, null)?.analysis_id
-    const current = items.filter(f => f.status !== "dismissed" && f.analysis_id === activeAttempt)
+    const workflowOf = f => f.attempt_type === "cover_letter_only" ? "cover_letter" : "resume"
+    const current = items.filter(f => f.status !== "dismissed" && f.analysis_id === activeAttempt && workflowOf(f) === tab)
     const previous = items
-        .filter(f => f.status === "dismissed" || f.analysis_id !== activeAttempt)
+        .filter(f => (f.status === "dismissed" || f.analysis_id !== activeAttempt) && workflowOf(f) === tab)
         .sort((a, b) => parseServerTimestamp(a.created_at) - parseServerTimestamp(b.created_at))
 
     // item 6: once a Section Edit for a section is accepted, that section's individual AI/
@@ -1854,6 +2125,10 @@ function FeedbackInbox({ analysisId }) {
 
     return <section>
         <h2 className="view-title">Mentor Feedback</h2>
+        <div className="history-type-toggle">
+            <button className={tab === "resume" ? "active" : ""} onClick={() => setTab("resume")}>Resume Analysis<NotificationBadge count={unreadByAttemptType.resume_analysis} /></button>
+            <button className={tab === "cover_letter" ? "active" : ""} onClick={() => setTab("cover_letter")}>Cover Letters<NotificationBadge count={unreadByAttemptType.cover_letter_only} /></button>
+        </div>
         <div className="feedback-list">
             {current.length ? current.map(renderItem) : <p className="muted">No feedback yet for your current attempt.</p>}
         </div>
@@ -2041,6 +2316,15 @@ function App() {
     // the reset-on-file-change effect below (which would otherwise wipe the very result/
     // analysisId/decisions/docs that same restoration just set)
     const restoringAttemptRef = useRef(false)
+    const [notifSummary, refreshNotifications] = useNotificationSummary(!!user)
+    // "viewing the attempt clears unread state" - fires whenever the active attempt changes,
+    // covering both reopening a past attempt from history and simply landing on a freshly
+    // analysed one (a no-op there, since a brand-new attempt can't have unread activity yet)
+    useEffect(() => {
+        if (!analysisId) return
+        api.post("/notifications/mark-read", { analysis_id: analysisId }).then(refreshNotifications).catch(() => {})
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [analysisId])
     const providerMeta = PROVIDER_OPTIONS.find(p => p.key === provider)
     const visibleProviders = PROVIDER_OPTIONS.filter(p => p.key !== "local" || status.localAllowed)
     const needsKey = providerMeta?.byok && status[provider] === false
@@ -2167,7 +2451,13 @@ function App() {
             setSidebarCollapsed(false)
             setSetupExpanded(false)
             setExported(false)
-            setJobDescription(jd)
+            // only sync the override JD (e.g. Job Matching's scraped JD) back into the main
+            // textarea state - `jd` here was captured from `jobDescription` at the moment
+            // analyse() was called, and the request above can take a long time (up to the
+            // full 10-minute poll timeout) during which the JD textarea stays editable; when
+            // no override was given, unconditionally calling setJobDescription(jd) would
+            // silently overwrite whatever the user typed into that textarea while waiting
+            if (jdOverride !== undefined) setJobDescription(jd)
             hasAutoCollapsedRef.current = false
             // restore any docs already generated for this analysis so tabs don't wipe them
             try {
@@ -2409,7 +2699,7 @@ function App() {
                     "Signed in as" yet worth the space - a way back into past attempts (with
                     no upload, no processing) is more useful here */}
                 {!result && <span className="topbar-inline">
-                    <button className="btn-secondary" onClick={() => setViewingHistoryOnly(true)}><History size={13} /> View Past Attempts</button>
+                    <button className="btn-secondary" onClick={() => setViewingHistoryOnly(true)}><History size={13} /> View Past Attempts<NotificationBadge count={notifSummary.unread_total} /></button>
                     <button className="btn-secondary" onClick={logout}>{user.is_guest ? <><LogIn size={13} /> Sign In</> : <><LogOut size={13} /> Sign out</>}</button>
                 </span>}
             </div>
@@ -2434,16 +2724,16 @@ function App() {
             {result && <div className="setup-collapse-row"><button className="btn-ghost" onClick={() => setSetupExpanded(false)}>Hide setup</button></div>}
         </>)}
         {error && <p className="warning-strip">{error}</p>}
-        {!result && !viewingHistoryOnly && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
+        {!result && !viewingHistoryOnly && <details className="card"><summary>Mentor Feedback &amp; Review Sessions<NotificationBadge count={notifSummary.unread_total} /></summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox unreadByAttemptType={notifSummary.by_attempt_type} /></div></details>}
         {!result && viewingHistoryOnly && <section className="mentor-workspace">
             <div className="detail-head">
                 <button className="btn-secondary" onClick={() => setViewingHistoryOnly(false)}>← Back</button>
                 <h3 className="detail-title">Attempt History</h3>
             </div>
-            <AttemptHistory history={history} onOpenAttempt={id => { setViewingHistoryOnly(false); openHistoryAttempt(id) }} />
+            <AttemptHistory history={history} onOpenAttempt={id => { setViewingHistoryOnly(false); openHistoryAttempt(id) }} unreadByAnalysisId={notifSummary.by_analysis_id} />
         </section>}
         {result && <>
-            <TopNav view={view} setView={setView} />
+            <TopNav view={view} setView={setView} badges={{ "Attempt History": notifSummary.unread_total, "Mentor Feedback": notifSummary.unread_total }} />
             <div className={`workspace ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
             <ResultsSidebar result={result} user={user} onLogout={logout} history={history} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
             <div className="workspace-main">
@@ -2457,11 +2747,11 @@ function App() {
                         ? <><h2 className="view-title">Generate Tailored CV</h2><AnalysisRequiredGate icon={FileEdit} busy={busy} message="A Tailored CV is built from rewrite suggestions, which need a full resume analysis first." onAnalyse={() => analyse(undefined, { landOn: "Tailored CV" })} /></>
                         : <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} fullName={fullName} />)}
                     {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} onChangeJobDescription={refreshJobDescription} />}
-                    {view === "Mentor Feedback" && <FeedbackInbox analysisId={analysisId || result?.analysis_id} />}
+                    {view === "Mentor Feedback" && <FeedbackInbox analysisId={analysisId || result?.analysis_id} attemptType={result?.attempt_type} unreadByAttemptType={notifSummary.by_attempt_type} />}
                     {view === "Insights" && (isCoverLetterOnlyAttempt
                         ? <><h2 className="view-title">Insights</h2><AnalysisRequiredGate icon={BarChart3} busy={busy} message="Score trends, ATS match, and section-strength insights need a full resume analysis." onAnalyse={() => analyse(undefined, { landOn: "Insights" })} /></>
                         : <Insights result={result} history={history} decisions={decisions} />)}
-                    {view === "Attempt History" && <AttemptHistory history={history} onOpenAttempt={openHistoryAttempt} />}
+                    {view === "Attempt History" && <AttemptHistory history={history} onOpenAttempt={openHistoryAttempt} unreadByAnalysisId={notifSummary.by_analysis_id} />}
                     {view === "Job Matching" && <JobMatching
                         result={result} provider={provider} localEndpoint={localEndpoint}
                         jobMatchState={jobMatchState} setJobMatchState={setJobMatchState}

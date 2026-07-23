@@ -138,11 +138,37 @@ router.post("/cv", authenticateToken, llmLimiter, async (req, res) => {
     }
 })
 
+// mirrors acceptedPreviewOverride above, using the same "preview:<id>"-style magic key
+// convention (feedback_type='edit', a synthetic suggestion_key rather than a real bullet's)
+// for the mentor's whole-document Cover Letter edit - see mentor.js's dedicated Cover Letter
+// workspace and its /mentor/feedback POST for how this row gets created
+function acceptedCoverLetterOverride(analysisId, candidateId) {
+    if (!analysisId) return null
+    const row = getDb().prepare(`
+        SELECT suggested_text FROM mentor_feedback
+        WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'edit'
+          AND status = 'accepted' AND suggestion_key = ?
+        ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(analysisId, candidateId, `cover_letter:${analysisId}`)
+    return row ? row.suggested_text : null
+}
+
 router.post("/cover-letter", authenticateToken, llmLimiter, async (req, res) => {
     const analysisId = req.body.analysis_id ? parseInt(req.body.analysis_id) : null
     if (req.body.analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
         return res.status(404).json({ error: "Analysis not found." })
     }
+
+    const coverLetterOverride = acceptedCoverLetterOverride(analysisId, req.user.id)
+    if (coverLetterOverride !== null) {
+        if (analysisId) {
+            getDb().prepare(
+                "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+            ).run(analysisId, req.user.id, "cover_letter", coverLetterOverride, String(req.body.company || "").slice(0, 200))
+        }
+        return res.json({ cover_letter_text: coverLetterOverride })
+    }
+
     const enginePayload = buildEnginePayload(req, res, {})
     if (!enginePayload) return
 
