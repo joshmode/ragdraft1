@@ -96,7 +96,13 @@ def extract_jd_kws(job_desc: str, provider: str, local_endpoint: str, model: str
     # was truncating the response before the JSON ever appeared
     raw = llm_call(user_prompt=prompt, provider=provider, local_endpoint=local_endpoint,
                    model=model, max_tokens=4096, api_key=api_key)
-    return _parse_json(raw)
+    parsed = _parse_json(raw)
+    # a non-list (or a list with non-string entries) would otherwise reach _kw_in_resume's
+    # kw.lower() uncaught and crash the whole /analyse request - treat it as an extraction
+    # failure instead, same as any other malformed response from this call.
+    if not isinstance(parsed, list):
+        raise ValueError(f"expected a JSON array of keywords, got {type(parsed).__name__}")
+    return [str(kw).strip() for kw in parsed if isinstance(kw, (str, int, float)) and str(kw).strip()]
 
 
 _QUANT_RE = re.compile(r'(?<!\w)(?:\$?\d+(?:\.\d+)?(?:[%xX])?|\d+(?:\.\d+)?\s*(?:users?|people|clients?|customers?|hours?|days?|weeks?|months?|years?))(?!\w)', re.IGNORECASE)
@@ -176,11 +182,17 @@ def _run_critic(
                 model=model, max_tokens=1024, timeout=30, max_retries=1, api_key=api_key,
             )
             try:
-                result = _parse_json(retry_raw)
+                parsed_retry = _parse_json(retry_raw)
+                # only replace result if it's actually a usable object - otherwise a
+                # non-dict (e.g. the model answering with a bare string/array) would
+                # blow up on the .get()/["critic"]= calls below, defeating the "keep
+                # pre-critic result" fallback this function is supposed to provide
+                if isinstance(parsed_retry, dict):
+                    result = parsed_retry
             except Exception:
                 pass
 
-            sev = result.get("severity", "yellow").lower()
+            sev = str(result.get("severity", "yellow")).lower()
             if sev not in ("red", "yellow", "green"):
                 sev = "yellow"
             result["severity"] = sev
@@ -897,7 +909,11 @@ def gen_cv(
             cv_text += f"{k}: {v}\n"
 
     for sec, lines in resume.sections.items():
-        cv_text += f"\n=== {sec} ===\n"
+        # HEADER is the parser's internal bucket for stray intro/tagline lines before the
+        # first real section - analyse()/calc_score() already exclude it from rewriting and
+        # scoring, so it must not be advertised to the LLM as a mandatory "## HEADER" section.
+        if sec != "HEADER":
+            cv_text += f"\n=== {sec} ===\n"
         if sec in section_overrides:
             for line in section_overrides[sec].splitlines():
                 if line.strip():
@@ -910,7 +926,7 @@ def gen_cv(
             cv_text += line + "\n"
 
     # cv_text already has decisions applied - never show the model dismissed rewrite text again
-    section_names = list(resume.sections.keys())
+    section_names = [sec for sec in resume.sections.keys() if sec != "HEADER"]
     section_list = ", ".join(section_names) if section_names else "the sections present in the resume"
 
     sys_prompt = (

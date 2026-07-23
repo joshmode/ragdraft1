@@ -50,7 +50,11 @@ function mentorOverridesFor(analysisId, candidateId) {
         SELECT suggestion_key, suggested_text FROM mentor_feedback
         WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'edit'
           AND status = 'accepted' AND suggestion_key != ''
+        ORDER BY updated_at ASC, id ASC
     `).all(analysisId, candidateId)
+    // last accepted edit per suggestion_key wins if the same bullet was re-edited and
+    // re-accepted more than once - same "last one wins" ordering as mentorSectionOverridesFor
+    // below, without it Object.fromEntries picks an arbitrary (insertion-order-dependent) row
     return Object.fromEntries(rows.map(r => [r.suggestion_key, r.suggested_text]))
 }
 

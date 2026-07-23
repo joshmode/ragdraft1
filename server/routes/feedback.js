@@ -8,7 +8,11 @@ const router = Router()
 router.post("/", authenticateToken, (req, res) => {
     const { analysis_id, consent, confidence, comment } = req.body
     if (!consent) return res.status(400).json({ error: "Evaluation consent is required." })
-    if (analysis_id && !getOwnedAnalysis(analysis_id, req.user.id)) {
+    // analysis_id is parsed JSON, not just a string/number - an object or array (e.g. a client
+    // sending analysis_id: {}) passed straight into better-sqlite3's bind list throws a
+    // RangeError synchronously instead of failing the ownership check below cleanly
+    const analysisId = analysis_id ? parseInt(analysis_id) : null
+    if (analysis_id && (!analysisId || !getOwnedAnalysis(analysisId, req.user.id))) {
         return res.status(404).json({ error: "Analysis not found." })
     }
     const score = confidence === undefined || confidence === "" ? null : Number(confidence)
@@ -18,7 +22,7 @@ router.post("/", authenticateToken, (req, res) => {
     const db = getDb()
     const result = db.prepare(
         "INSERT INTO evaluation_feedback (user_id, analysis_id, consent, confidence, comment, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
-    ).run(req.user.id, analysis_id || null, 1, score, String(comment || "").trim().slice(0, 2000))
+    ).run(req.user.id, analysisId || null, 1, score, String(comment || "").trim().slice(0, 2000))
     res.status(201).json({ id: result.lastInsertRowid, ok: true })
 })
 

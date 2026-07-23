@@ -61,7 +61,19 @@ function getUserApiKey(userId, provider) {
         "SELECT encrypted_key, iv, auth_tag FROM user_api_keys WHERE user_id = ? AND provider = ?"
     ).get(userId, provider)
     if (!row) return null
-    return decrypt({ encryptedKey: row.encrypted_key, iv: row.iv, authTag: row.auth_tag })
+    try {
+        return decrypt({ encryptedKey: row.encrypted_key, iv: row.iv, authTag: row.auth_tag })
+    } catch {
+        // a raw decrypt failure (e.g. KEY_ENCRYPTION_SECRET rotated since this row was saved,
+        // or a corrupted row) is not a ProviderResolutionError by class, but every call site
+        // resolveProviderForRequest has (analysis.js, generation.js, scraper.js) only special-
+        // cases ProviderResolutionError and re-throws anything else - inside their async route
+        // handlers that re-throw becomes an unhandled rejection with no response ever sent,
+        // instead of the clean "add your key again" 400 the missing-key case already gets
+        throw new ProviderResolutionError(
+            `Your saved ${provider} API key could not be read and may be out of date. Please remove it and add it again.`
+        )
+    }
 }
 
 class ProviderResolutionError extends Error {

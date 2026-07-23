@@ -7,7 +7,7 @@ import {
     FileOutput, PanelLeftClose, PanelLeftOpen, IdCard, TrendingUp,
     TrendingDown, Check, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, UploadCloud, Sparkles,
     ClipboardCheck, Download, CheckCircle2, XCircle, LogIn, LogOut, Loader2, KeyRound, Lightbulb,
-    File, RotateCw, Trash2, Clock, PenSquare, Building2, Ban, History,
+    File as FileIcon, RotateCw, Trash2, Clock, PenSquare, Building2, Ban, History,
 } from "lucide-react"
 import api from "./api/client"
 import { useAuth } from "./context/AuthContext"
@@ -133,6 +133,13 @@ function fileToBase64(file) {
         reader.onerror = () => reject(reader.error)
         reader.readAsDataURL(file)
     })
+}
+
+function base64ToBlob(b64, type = "application/pdf") {
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return new Blob([bytes], { type })
 }
 
 function waitForAnalysis(jobId) {
@@ -429,7 +436,7 @@ function ResumeSetup({ file, setFile, jobDescription, setJobDescription, onAnaly
                         <input {...getInputProps()} />
                         {file ? (
                             <div className="upload-card">
-                                <span className="upload-card-icon"><File size={20} /></span>
+                                <span className="upload-card-icon"><FileIcon size={20} /></span>
                                 <div className="upload-card-info">
                                     <span className="upload-card-name" title={file.name}>{file.name}</span>
                                     <span className="upload-card-meta"><CheckCircle2 size={12} /> {formatFileSize(file.size)} · Uploaded</span>
@@ -1398,7 +1405,21 @@ function CandidateDetail({ candidate, onBack }) {
                 const activePage = res.headers["x-active-page"]
                 createdUrl = URL.createObjectURL(res.data) + (highlightActiveKey && activePage ? `#page=${activePage}` : "")
                 setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return createdUrl })
-            } catch { if (!cancelled) setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return "" }) }
+            } catch {
+                if (cancelled) return
+                // the highlight call can fail for reasons unrelated to the file itself (a
+                // transient engine hiccup, a timeout) - when the cached bytes are genuinely a
+                // PDF, fall back to the plain, unhighlighted PDF instead of discarding it, same
+                // as the candidate's own RewriteReview viewer already does. Only a genuinely
+                // non-PDF upload (docx, etc.) should ever fall through to the "muted" message.
+                const isPdf = atob(fileB64.slice(0, 8)).startsWith("%PDF")
+                if (isPdf) {
+                    createdUrl = URL.createObjectURL(base64ToBlob(fileB64))
+                    setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return createdUrl })
+                } else {
+                    setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return "" })
+                }
+            }
         }
         render()
         return () => {
@@ -2014,6 +2035,12 @@ function App() {
     const [jobMatchState, setJobMatchState] = useState({ url: "", scraped: "", jobId: null, comparison: null, linkedinUrl: "", linkedinProfile: null, company: "" })
     const [jobMatchBusyAction, setJobMatchBusyAction] = useState("")
     const hasAutoCollapsedRef = useRef(false)
+    // openHistoryAttempt restores the exact resume file a past attempt was generated from via
+    // setFile(), purely so the PDF preview has bytes to render - that's a side effect of
+    // restoration, not a genuine "user picked a different file" action, so it must not trip
+    // the reset-on-file-change effect below (which would otherwise wipe the very result/
+    // analysisId/decisions/docs that same restoration just set)
+    const restoringAttemptRef = useRef(false)
     const providerMeta = PROVIDER_OPTIONS.find(p => p.key === provider)
     const visibleProviders = PROVIDER_OPTIONS.filter(p => p.key !== "local" || status.localAllowed)
     const needsKey = providerMeta?.byok && status[provider] === false
@@ -2081,6 +2108,7 @@ function App() {
     }
 
     useEffect(() => {
+        if (restoringAttemptRef.current) return
         setResult(null)
         setAnalysisId(null)
         setDecisions({})
@@ -2203,6 +2231,7 @@ function App() {
     // silently shows the wrong document.
     async function openHistoryAttempt(id) {
         setError("")
+        restoringAttemptRef.current = true
         try {
             const res = await api.get(`/analysis/${id}`)
             const resultsData = res.data.results || {}
@@ -2246,7 +2275,7 @@ function App() {
             setSetupExpanded(false)
             setExported(false)
             hasAutoCollapsedRef.current = false
-        } catch (err) { setError(getError(err)) }
+        } catch (err) { setError(getError(err)) } finally { restoringAttemptRef.current = false }
     }
 
     // Smart Cache Reuse, Case A: the resume is the source of truth for cache invalidation,
