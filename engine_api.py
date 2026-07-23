@@ -133,6 +133,7 @@ def gen_cv_endpoint():
     suggestions = data.get("rewrite_suggestions", None)
     decisions = data.get("rewrite_decisions", None)
     mentor_overrides = data.get("mentor_overrides", None)
+    section_overrides = data.get("section_overrides", None)
 
     cv_text = gen_cv(
         resume, jd, acc_map, provider, local_endpoint,
@@ -141,6 +142,7 @@ def gen_cv_endpoint():
         model=model,
         api_key=api_key,
         mentor_overrides=mentor_overrides,
+        section_overrides=section_overrides,
     )
     return jsonify({"cv_text": cv_text})
 

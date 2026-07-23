@@ -326,7 +326,10 @@ router.get("/candidates/:candidateId/cover-letters", authenticateToken, requireR
     res.json(rows.map(r => ({ ...r, attempt_number: attemptOf[r.analysis_id] || null })))
 })
 
-// a comment, or a suggested edit (original_text -> suggested_text)
+// a comment, a bullet-level suggested edit (original_text -> suggested_text), or a
+// section-level edit (feedback_type='section_edit') that rewrites an entire extracted
+// section at once - see generation.js's mentorSectionOverridesFor for how an accepted one
+// overrides all bullet-level AI rewrites for that section in Tailored CV generation
 router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) => {
     const { candidate_id, analysis_id, suggestion_key, feedback_type, section, original_text, suggested_text, comment } = req.body
     const candidateId = parseInt(candidate_id)
@@ -334,9 +337,12 @@ router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) =>
     if (!session) {
         return res.status(404).json({ error: "Candidate not found in your active review sessions." })
     }
-    const type = feedback_type === "edit" ? "edit" : "comment"
-    if (type === "edit" && !String(suggested_text || "").trim()) {
+    const type = ["edit", "section_edit"].includes(feedback_type) ? feedback_type : "comment"
+    if ((type === "edit" || type === "section_edit") && !String(suggested_text || "").trim()) {
         return res.status(400).json({ error: "Edit suggestions need suggested text." })
+    }
+    if (type === "section_edit" && !String(section || "").trim()) {
+        return res.status(400).json({ error: "A section edit must specify which section it applies to." })
     }
     if (type === "comment" && !String(comment || "").trim()) {
         return res.status(400).json({ error: "Comment cannot be empty." })

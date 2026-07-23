@@ -260,36 +260,36 @@ function AuthBar({ user, onLogout }) {
 }
 
 // nav is always fixed and visible - it never auto-hides or floats on scroll (see App()'s
-// removed navHidden scroll effect); the only thing that expands/collapses here is the
-// More group, animated via max-width/opacity rather than a mount/unmount so it transitions
-// smoothly instead of popping in and out
+// removed navHidden scroll effect). Collapsed, it's a single row at a sensible height; only
+// pressing the expand arrow reveals More as a genuine second row below it, height-animated
+// in rather than fighting for space in the same row (which used to let the always-visible
+// tabs themselves wrap onto a second line and made the "collapsed" bar look permanently tall).
 function TopNav({ view, setView }) {
     const [moreOpen, setMoreOpen] = useState(false)
 
     return <nav className="top-nav">
         <div className="nav-row">
-            {/* .nav-tabs is its own flex:1 centered container so the always-visible tabs stay
-                centre-aligned and visually balanced regardless of the toggle's fixed position
-                on the far right (an auto-margin toggle would otherwise defeat justify-content
-                on a shared flex row) */}
+            {/* .nav-tabs is its own flex:1 centered container, kept to a single non-wrapping
+                row (overflow scrolls instead of wrapping) so the always-visible tabs stay
+                centred and the bar never grows a second row on its own */}
             <div className="nav-tabs">
                 {ALWAYS_NAV.map(({ key, icon: Icon }) => (
                     <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)}>
                         <Icon size={14} /><span>{key}</span>
                     </button>
                 ))}
-                <div className={`nav-more-group ${moreOpen ? "open" : ""}`}>
-                    <span className="nav-more-label">More</span>
-                    {MORE_NAV.map(({ key, icon: Icon }) => (
-                        <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)} tabIndex={moreOpen ? 0 : -1}>
-                            <Icon size={14} /><span>{key}</span>
-                        </button>
-                    ))}
-                </div>
             </div>
             <button className={`nav-more-toggle ${moreOpen ? "open" : ""}`} onClick={() => setMoreOpen(!moreOpen)} title={moreOpen ? "Collapse" : "More"}>
                 <ChevronDown size={16} />
             </button>
+        </div>
+        <div className={`nav-more-row ${moreOpen ? "open" : ""}`}>
+            <span className="nav-more-label">More</span>
+            {MORE_NAV.map(({ key, icon: Icon }) => (
+                <button className={`nav-pill ${view === key ? "active" : ""}`} key={key} onClick={() => setView(key)} tabIndex={moreOpen ? 0 : -1}>
+                    <Icon size={14} /><span>{key}</span>
+                </button>
+            ))}
         </div>
     </nav>
 }
@@ -933,12 +933,17 @@ function SavedIndicator({ state }) {
     return <span className={`saved-indicator ${state}`}>{state === "saving" ? <><Loader2 size={12} className="spin-icon" /> Saving…</> : <><CheckCircle2 size={12} /> Saved</>}</span>
 }
 
-function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText, onExport, fullName, company }) {
+function DocumentGenerator({ type, result, provider, localEndpoint, decisions, analysisId, text, setText, onExport, fullName, company, onChangeJobDescription }) {
     const [busy, setBusy] = useState(false)
     const [exportBusy, setExportBusy] = useState(false)
     const [error, setError] = useState("")
     const [mobileTab, setMobileTab] = useState("edit")
     const [saveState, setSaveState] = useState("idle")
+    // Smart Cache Reuse, Case A (item 80): editing the JD here never reruns Resume Analysis -
+    // it reuses the cached analysis and only regenerates Keyword Gap + this Cover Letter
+    const [jdEditorOpen, setJdEditorOpen] = useState(false)
+    const [jdDraft, setJdDraft] = useState("")
+    const [jdBusy, setJdBusy] = useState(false)
     const title = type === "cv" ? "Tailored CV" : "Cover Letter"
     const documentType = type === "cv" ? "cv" : "cover_letter"
     const firstRun = useRef(true)
@@ -992,6 +997,16 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
         }
     }
 
+    async function saveJobDescription() {
+        setJdBusy(true)
+        setError("")
+        try {
+            const { ok, error: err } = await onChangeJobDescription(jdDraft)
+            if (ok) setJdEditorOpen(false)
+            else setError(err || "Couldn't regenerate against the new job description.")
+        } finally { setJdBusy(false) }
+    }
+
     async function downloadExport(kind) {
         setExportBusy(true)
         try {
@@ -1014,7 +1029,21 @@ function DocumentGenerator({ type, result, provider, localEndpoint, decisions, a
     return <section>
         <h2 className="view-title">Generate {title}</h2>
         <p className="muted">{type === "cv" ? "The generated CV applies accepted rewrites and keeps dismissed original text. Your last generated version is saved automatically." : "Generate a professional cover letter tailored to the job description. Your last generated version is saved automatically."}</p>
-        <button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>
+        <div className="doc-generate-row">
+            <button className="btn-primary generate-btn" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" />Generating — usually under a minute...</> : text ? `Regenerate ${title}` : `Generate ${title}`}</button>
+            {onChangeJobDescription && <button className="btn-secondary generate-btn" disabled={busy} onClick={() => { setJdDraft(result.job_description || ""); setJdEditorOpen(o => !o) }}>
+                <FileEdit size={14} /> Change Job Description
+            </button>}
+        </div>
+        {jdEditorOpen && <div className="card jd-editor-card">
+            <span className="section-label">Job Description</span>
+            <p className="muted">Editing this reuses your existing resume analysis - only the Cover Letter and Keyword Gap are regenerated.</p>
+            <textarea className="input-field" value={jdDraft} onChange={e => setJdDraft(e.target.value)} placeholder="Paste the job description here" />
+            <div className="composer-actions">
+                <button className="btn-primary" disabled={jdBusy} onClick={saveJobDescription}>{jdBusy ? <><span className="spinner" /> Regenerating…</> : "Save & Regenerate"}</button>
+                <button className="btn-ghost" disabled={jdBusy} onClick={() => setJdEditorOpen(false)}>Cancel</button>
+            </div>
+        </div>}
         {error && <p className="error-msg">{error}</p>}
         {text && <>
             <div className="split-editor-head">
@@ -1212,20 +1241,22 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
         }
     }
 
+    const isEditLike = type === "edit" || type === "section_edit"
     return <div className="card composer">
         <span className="section-label">Send Feedback to Candidate</span>
         <div className="composer-row">
             <select className="input-field composer-type" value={type} onChange={e => setType(e.target.value)}>
                 <option value="comment">Comment</option>
-                <option value="edit">Suggested edit</option>
+                <option value="edit">Bullet Edit</option>
+                <option value="section_edit">Section Edit</option>
             </select>
             <input className="input-field" value={section} onChange={e => setSection(e.target.value)} placeholder="Section (e.g. EXPERIENCE, optional)" />
         </div>
-        {type === "edit" && <>
-            <textarea className="input-field composer-area" value={originalText} onChange={e => setOriginalText(e.target.value)} placeholder="Original text this edit applies to" />
-            <textarea className="input-field composer-area" value={suggestedText} onChange={e => setSuggestedText(e.target.value)} placeholder="Your suggested replacement text" />
+        {isEditLike && <>
+            <textarea className="input-field composer-area" value={originalText} onChange={e => setOriginalText(e.target.value)} placeholder={type === "section_edit" ? "Original text of the whole section" : "Original text this edit applies to"} />
+            <textarea className="input-field composer-area" value={suggestedText} onChange={e => setSuggestedText(e.target.value)} placeholder={type === "section_edit" ? "Your rewritten version of the whole section" : "Your suggested replacement text"} />
         </>}
-        <textarea className="input-field composer-area" value={comment} onChange={e => setComment(e.target.value)} placeholder={type === "edit" ? "Why this edit helps (optional)" : "Your feedback"} />
+        <textarea className="input-field composer-area" value={comment} onChange={e => setComment(e.target.value)} placeholder={isEditLike ? "Why this edit helps (optional)" : "Your feedback"} />
         <div className="composer-actions">
             <button className="btn-primary" onClick={send}>Send Feedback</button>
             {status && <span className="muted">{status}</span>}
@@ -1256,6 +1287,9 @@ function CandidateDetail({ candidate, onBack }) {
     const [previewDirty, setPreviewDirty] = useState(false)
     // per-suggestion "Edit" pill -> floating composer, keyed by suggestion id (item 60)
     const [activeComposerKey, setActiveComposerKey] = useState(null)
+    // per-section "Edit Section" pill -> floating composer, keyed by section name - mutually
+    // exclusive with activeComposerKey (only one composer, bullet or section, open at a time)
+    const [activeSectionEdit, setActiveSectionEdit] = useState(null)
     // remembers the preview mode in effect before an edit forced it to "original", so closing
     // the composer restores exactly where the mentor was
     const previewModeBeforeEdit = useRef(null)
@@ -1283,20 +1317,31 @@ function CandidateDetail({ candidate, onBack }) {
             setPreviewMode("original")
             setPreviewDirty(false)
             setActiveComposerKey(null)
+            setActiveSectionEdit(null)
             previewModeBeforeEdit.current = null
         } catch (err) { setError(getError(err)) }
     }
 
     // starting an edit forces the PDF back to "original" (so the auto-jump below is visible)
-    // and remembers whatever mode was active so cancelling/sending restores it exactly
+    // and remembers whatever mode was active so cancelling/sending restores it exactly.
+    // Bullet Edit and Section Edit are mutually exclusive - opening one closes the other.
     function startEdit(itemId) {
         if (activeComposerKey === itemId) { cancelEdit(); return }
+        setActiveSectionEdit(null)
         if (previewModeBeforeEdit.current === null) previewModeBeforeEdit.current = previewMode
         setPreviewMode("original")
         setActiveComposerKey(itemId)
     }
+    function startSectionEdit(sectionName) {
+        if (activeSectionEdit === sectionName) { cancelEdit(); return }
+        setActiveComposerKey(null)
+        if (previewModeBeforeEdit.current === null) previewModeBeforeEdit.current = previewMode
+        setPreviewMode("original")
+        setActiveSectionEdit(sectionName)
+    }
     function cancelEdit() {
         setActiveComposerKey(null)
+        setActiveSectionEdit(null)
         if (previewModeBeforeEdit.current !== null) {
             setPreviewMode(previewModeBeforeEdit.current)
             previewModeBeforeEdit.current = null
@@ -1327,9 +1372,12 @@ function CandidateDetail({ candidate, onBack }) {
     }, [analysis?.id, candidate.id])
 
     // re-highlights the cached PDF bytes whenever the analysis changes OR the mentor
-    // starts/stops editing a specific suggestion - reusing the exact active_key/
+    // starts/stops editing a specific suggestion or section - reusing the exact active_key/
     // X-Active-Page/#page= mechanism the candidate's own RewriteReview uses, so the PDF
-    // auto-jumps to whichever suggestion is being edited without re-fetching the file
+    // auto-jumps to whichever suggestion (or the first bullet of whichever section) is being
+    // edited without re-fetching the file
+    const sectionEditActiveKey = activeSectionEdit ? (analysis?.results?.rewrites?.[activeSectionEdit]?.[0]?.id || "") : ""
+    const highlightActiveKey = activeComposerKey || sectionEditActiveKey
     useEffect(() => {
         if (!analysis || !fileB64) {
             setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return "" })
@@ -1345,10 +1393,10 @@ function CandidateDetail({ candidate, onBack }) {
         )
         async function render() {
             try {
-                const res = await api.post("/analysis/highlight", { file: fileB64, items, active_key: activeComposerKey || "" }, { responseType: "blob" })
+                const res = await api.post("/analysis/highlight", { file: fileB64, items, active_key: highlightActiveKey }, { responseType: "blob" })
                 if (cancelled) return
                 const activePage = res.headers["x-active-page"]
-                createdUrl = URL.createObjectURL(res.data) + (activeComposerKey && activePage ? `#page=${activePage}` : "")
+                createdUrl = URL.createObjectURL(res.data) + (highlightActiveKey && activePage ? `#page=${activePage}` : "")
                 setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return createdUrl })
             } catch { if (!cancelled) setPdfUrl(prev => { if (prev) URL.revokeObjectURL(prev.split("#")[0]); return "" }) }
         }
@@ -1359,7 +1407,7 @@ function CandidateDetail({ candidate, onBack }) {
             // (and therefore the revoke-on-replace above) ever ran for this URL
             if (createdUrl) URL.revokeObjectURL(createdUrl.split("#")[0])
         }
-    }, [analysis?.id, fileB64, activeComposerKey])
+    }, [analysis?.id, fileB64, highlightActiveKey])
 
     async function runDiff() {
         if (!diffFrom || !diffTo) return
@@ -1440,8 +1488,46 @@ function CandidateDetail({ candidate, onBack }) {
         <div className="detail-head">
             <button className="btn-secondary" onClick={onBack}>← All candidates</button>
             <h3 className="detail-title">{candidate.name}</h3>
+            {/* item 71: the More toggle lives beside All Candidates now, not beneath the PDF */}
+            {analysis && !diff && <button className="btn-secondary btn-small mentor-more-toggle-btn" onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} More</button>}
         </div>
         {error && <p className="warning-strip">{error}</p>}
+        {analysis && !diff && moreOpen && <div className="card mentor-more-panel">
+            <div className="mentor-more-tabs">
+                <button className={moreTab === "comments" ? "active" : ""} onClick={() => openMoreTab("comments")}>Comment History</button>
+                <button className={moreTab === "accepted" ? "active" : ""} onClick={() => openMoreTab("accepted")}>Accepted AI Suggestions</button>
+                <button className={moreTab === "coverletters" ? "active" : ""} onClick={() => openMoreTab("coverletters")}>Cover Letters</button>
+            </div>
+
+            {moreTab === "comments" && <>
+                <span className="section-label">Current Attempt</span>
+                <div className="feedback-list">
+                    {sentCurrent.length ? sentCurrent.map(renderSentItem) : <p className="muted">No feedback sent yet for the current attempt.</p>}
+                </div>
+                {sentPrevious.length > 0 && <details className="card previous-feedback">
+                    <summary>Previous Attempts ({sentPrevious.length})</summary>
+                    <div className="feedback-list">{sentPrevious.map(renderSentItem)}</div>
+                </details>}
+            </>}
+
+            {moreTab === "accepted" && (acceptedItems.length ? acceptedItems.map(item => (
+                <div className="card mentor-suggestion" key={item.id}>
+                    <span className="status-chip">{item.section}</span>
+                    <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">Accepted rewrite</span><p className="rewrite-text">{item.rewritten}</p></div></div>
+                </div>
+            )) : <p className="muted">No suggestions accepted yet.</p>)}
+
+            {moreTab === "coverletters" && (coverLetters == null ? <p className="muted">Loading…</p> : coverLetters.length ? coverLetters.map(cl => (
+                <div className="card" key={cl.id}>
+                    <div className="feedback-meta">
+                        <span className="fw-badge"><Building2 size={12} /> {cl.company || "Company not detected"}</span>
+                        <span className="status-chip">Attempt #{cl.attempt_number || "—"}</span>
+                        <small className="muted">{formatShortDate(cl.created_at)}</small>
+                    </div>
+                    <pre className="section-pre">{cl.content}</pre>
+                </div>
+            )) : <p className="muted">No cover letters generated yet.</p>)}
+        </div>}
         <div className="two-col">
             <div>
                 <details className="card mentor-history-card" open={historyOpen} onToggle={e => setHistoryOpen(e.currentTarget.open)}>
@@ -1479,6 +1565,11 @@ function CandidateDetail({ candidate, onBack }) {
                 {analysis && !Object.keys(sections).length && <div className="card muted">No sections were extracted for this analysis.</div>}
                 {analysis && Object.entries(sections).map(([name, lines], idx) => <details className="card" key={name} open={idx === 0}>
                     <summary>{name}</summary>
+                    {/* item 73: a filled Edit Section pill at the top of every section - a
+                        second, independent editing level from the per-bullet Edit above.
+                        Accepting it makes the mentor's rewrite that section's sole source of
+                        truth (see generation.js's mentorSectionOverridesFor) */}
+                    <button className="pill edit-section-pill" onClick={() => startSectionEdit(name)}><PenSquare size={12} /> {activeSectionEdit === name ? "Cancel Section Edit" : "Edit Section"}</button>
                     <pre className="section-pre">{lines.join("\n")}</pre>
                     {(rewrites[name] || []).filter(item => item.framework_used !== "none" && item.framework_used !== "error").map(item => <div className="mentor-suggestion" key={item.id}>
                         <div className="feedback-meta">
@@ -1502,14 +1593,22 @@ function CandidateDetail({ candidate, onBack }) {
                     {!diff.sections.some(sec => sec.diff.some(l => l.type !== "same")) && <p className="muted">No differences between these two revisions.</p>}
                 </>}
                 {analysis && !diff && <>
-                    <span className="section-label">Analysis #{analysis.id} · {analysis.score}/100 · {formatDateTime(analysis.created_at)}</span>
-                    <div className="mentor-preview-toggle">
-                        <button className={previewMode === "original" ? "active" : ""} onClick={() => setPreviewMode("original")}>Original PDF</button>
-                        <button className={previewMode === "rewritten" ? "active" : ""} onClick={() => setPreviewMode("rewritten")}>Rewritten Preview</button>
+                    {/* item 75: header + Original/Rewritten toggle + PDF viewer stay pinned
+                        together while the mentor scrolls through Extracted Sections on the
+                        left - the Rewritten Preview editor itself is intentionally outside
+                        this sticky block (it's a full editing surface, not a glance-while-
+                        scrolling reference) */}
+                    <div className="mentor-pdf-sticky">
+                        <span className="section-label">Analysis #{analysis.id} · {analysis.score}/100 · {formatDateTime(analysis.created_at)}</span>
+                        <div className="mentor-preview-toggle">
+                            <button className={previewMode === "original" ? "active" : ""} onClick={() => setPreviewMode("original")}>Original PDF</button>
+                            <button className={previewMode === "rewritten" ? "active" : ""} onClick={() => setPreviewMode("rewritten")}>Rewritten Preview</button>
+                        </div>
+                        {previewMode === "original" && (
+                            pdfUrl ? <div className="pdf-shell"><iframe className="pdf-frame" src={pdfUrl} title="Candidate resume" /></div> : <div className="card muted">Source preview is available for PDF uploads only.</div>
+                        )}
                     </div>
-                    {previewMode === "original" ? (
-                        pdfUrl ? <div className="pdf-shell"><iframe className="pdf-frame" src={pdfUrl} title="Candidate resume" /></div> : <div className="card muted">Source preview is available for PDF uploads only.</div>
-                    ) : <>
+                    {previewMode === "rewritten" && <>
                         <textarea className="input-field doc-editor mentor-preview-editor" value={previewEdited} onChange={e => { setPreviewEdited(e.target.value); setPreviewDirty(e.target.value !== previewMarkdown) }} />
                         <article className="card markdown-preview doc-preview"><ReactMarkdown>{previewEdited}</ReactMarkdown></article>
                         <div className="mentor-preview-actions">
@@ -1517,52 +1616,12 @@ function CandidateDetail({ candidate, onBack }) {
                             <button className="btn-ghost" onClick={discardEditing} disabled={!previewDirty}>Discard Without Saving</button>
                         </div>
                     </>}
-
-                    <div className="mentor-more-row">
-                        <button className="btn-secondary btn-small" onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} More</button>
-                    </div>
-                    {moreOpen && <div className="card mentor-more-panel">
-                        <div className="mentor-more-tabs">
-                            <button className={moreTab === "comments" ? "active" : ""} onClick={() => openMoreTab("comments")}>Comment History</button>
-                            <button className={moreTab === "accepted" ? "active" : ""} onClick={() => openMoreTab("accepted")}>Accepted AI Suggestions</button>
-                            <button className={moreTab === "coverletters" ? "active" : ""} onClick={() => openMoreTab("coverletters")}>Cover Letters</button>
-                        </div>
-
-                        {moreTab === "comments" && <>
-                            <span className="section-label">Current Attempt</span>
-                            <div className="feedback-list">
-                                {sentCurrent.length ? sentCurrent.map(renderSentItem) : <p className="muted">No feedback sent yet for the current attempt.</p>}
-                            </div>
-                            {sentPrevious.length > 0 && <details className="card previous-feedback">
-                                <summary>Previous Attempts ({sentPrevious.length})</summary>
-                                <div className="feedback-list">{sentPrevious.map(renderSentItem)}</div>
-                            </details>}
-                        </>}
-
-                        {moreTab === "accepted" && (acceptedItems.length ? acceptedItems.map(item => (
-                            <div className="card mentor-suggestion" key={item.id}>
-                                <span className="status-chip">{item.section}</span>
-                                <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{item.original}</p></div><div className="rewrite-pane after"><span className="pane-label">Accepted rewrite</span><p className="rewrite-text">{item.rewritten}</p></div></div>
-                            </div>
-                        )) : <p className="muted">No suggestions accepted yet.</p>)}
-
-                        {moreTab === "coverletters" && (coverLetters == null ? <p className="muted">Loading…</p> : coverLetters.length ? coverLetters.map(cl => (
-                            <div className="card" key={cl.id}>
-                                <div className="feedback-meta">
-                                    <span className="fw-badge"><Building2 size={12} /> {cl.company || "Company not detected"}</span>
-                                    <span className="status-chip">Attempt #{cl.attempt_number || "—"}</span>
-                                    <small className="muted">{formatShortDate(cl.created_at)}</small>
-                                </div>
-                                <pre className="section-pre">{cl.content}</pre>
-                            </div>
-                        )) : <p className="muted">No cover letters generated yet.</p>)}
-                    </div>}
                 </>}
                 {!analysis && !diff && <div className="card muted">Open an analysis or compare two revisions to see details here.</div>}
             </div>
         </div>
 
-        {!activeComposerKey && <button className="mentor-compose-fab" onClick={() => setComposeOpen(true)} title="Compose general feedback"><PenSquare size={20} /></button>}
+        {!activeComposerKey && !activeSectionEdit && <button className="mentor-compose-fab" onClick={() => setComposeOpen(true)} title="Compose general feedback"><PenSquare size={20} /></button>}
         {composeOpen && createPortal(<div className="modal-overlay" onClick={() => setComposeOpen(false)}>
             <div className="modal-panel" onClick={e => e.stopPropagation()}>
                 <div className="modal-head">
@@ -1573,8 +1632,10 @@ function CandidateDetail({ candidate, onBack }) {
             </div>
         </div>, document.body)}
 
-        {/* item 60: floating composer, not inline - opening it never reflows the section list
-            or PDF, and the mentor keeps their scroll position in both */}
+        {/* item 60 + item 72: floating composer, not inline - opening it never reflows the
+            section list or PDF, and the mentor keeps their scroll position in both. Only the
+            selected BULLET's own original text is prefilled here - not the whole section
+            (that's what the separate Edit Section pill/composer below is for). */}
         {activeComposerKey && editingItem && createPortal(<div className="floating-composer">
             <div className="floating-composer-head">
                 <h4>Edit suggestion · {editingItem.section}</h4>
@@ -1582,13 +1643,28 @@ function CandidateDetail({ candidate, onBack }) {
             </div>
             <FeedbackComposer
                 candidateId={candidate.id} analysisId={analysis.id}
-                prefill={{ type: "edit", section: editingItem.section, original: (sections[editingItem.section] || []).join("\n"), key: editingItem.id }}
+                prefill={{ type: "edit", section: editingItem.section, original: editingItem.original, key: editingItem.id }}
                 onSent={(text) => {
                     const item = editingItem
                     cancelEdit()
                     load()
                     if (text) setPreviewEdited(prev => prev.includes(item.rewritten) ? prev.replace(item.rewritten, text) : prev.includes(item.original) ? prev.replace(item.original, text) : prev)
                 }}
+            />
+        </div>, document.body)}
+
+        {/* item 73/74: the second, independent editing level - rewriting an entire section
+            at once. Accepting it (see FeedbackInbox) makes it that section's sole source of
+            truth for Tailored CV generation, superseding every bullet-level rewrite there. */}
+        {activeSectionEdit && createPortal(<div className="floating-composer">
+            <div className="floating-composer-head">
+                <h4>Edit section · {activeSectionEdit}</h4>
+                <button className="btn-ghost modal-close" onClick={cancelEdit} title="Close"><X size={16} /></button>
+            </div>
+            <FeedbackComposer
+                candidateId={candidate.id} analysisId={analysis.id}
+                prefill={{ type: "section_edit", section: activeSectionEdit, original: (sections[activeSectionEdit] || []).join("\n"), key: `section_edit:${analysis.id}:${activeSectionEdit}` }}
+                onSent={() => { cancelEdit(); load() }}
             />
         </div>, document.body)}
     </section>
@@ -1682,7 +1758,15 @@ function formatDateTime(value) {
     return d ? d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""
 }
 
-function FeedbackInbox() {
+// Mentor Feedback is always scoped to whichever attempt is currently open, not just "the
+// most recent one with any feedback attached" - passing `analysisId` (the live workspace's
+// current attempt) lets it filter by an exact match instead of that heuristic, so opening a
+// brand-new session/attempt with zero feedback on it yet never shows stale feedback from an
+// older attempt as if it were current, and opening a historical attempt from Attempt History
+// automatically restores that attempt's feedback to the active view (items 7 and 8) - both
+// fall out of the same exact-match filter for free. Before any attempt exists at all
+// (analysisId is null), it falls back to the old "most recent attempt with feedback" view.
+function FeedbackInbox({ analysisId }) {
     const [items, setItems] = useState(null)
     const [error, setError] = useState("")
     // guards against a double-click firing two Accept/Dismiss requests for the same item
@@ -1707,26 +1791,40 @@ function FeedbackInbox() {
     if (!items) return <p className="muted">Loading feedback...</p>
     if (!items.length) return <div className="card muted">No mentor feedback yet. Join a review session from the sidebar, and your mentor's comments and suggested edits will appear here.</div>
 
-    // "current attempt" = the most recent attempt that has any feedback attached to it;
-    // everything from an older attempt, or already dismissed, moves into Previous Feedback
-    const currentAttempt = items.reduce((max, f) => Math.max(max, f.attempt_number || 0), 0)
-    const current = items.filter(f => f.status !== "dismissed" && f.attempt_number === currentAttempt)
+    const activeAttempt = analysisId || items.reduce((max, f) => (f.attempt_number || 0) > (max?.attempt_number || 0) ? f : max, null)?.analysis_id
+    const current = items.filter(f => f.status !== "dismissed" && f.analysis_id === activeAttempt)
     const previous = items
-        .filter(f => f.status === "dismissed" || f.attempt_number !== currentAttempt)
+        .filter(f => f.status === "dismissed" || f.analysis_id !== activeAttempt)
         .sort((a, b) => parseServerTimestamp(a.created_at) - parseServerTimestamp(b.created_at))
 
+    // item 6: once a Section Edit for a section is accepted, that section's individual AI/
+    // mentor bullet suggestions are superseded - they stay visible for historical context but
+    // read-only and struck through, since the mentor's rewritten section is now the source of
+    // truth for Tailored CV generation (see generation.js's mentorSectionOverridesFor)
+    const supersededSections = new Set(
+        items.filter(f => f.analysis_id === activeAttempt && f.feedback_type === "section_edit" && f.status === "accepted").map(f => f.section)
+    )
+
+    const FEEDBACK_TYPE_LABEL = { comment: "Comment", edit: "Bullet Edit", section_edit: "Section Edit" }
+
     function renderItem(f) {
-        return <div className={`card feedback-item ${f.status}`} key={f.id}>
+        // item 6: a bullet-level edit whose section has since been superseded by an accepted
+        // Section Edit stays visible (historical context) but is struck through, read-only,
+        // and explained - it's no longer what Tailored CV generation actually uses
+        const superseded = f.feedback_type === "edit" && f.section && supersededSections.has(f.section)
+        return <div className={`card feedback-item ${f.status} ${f.feedback_type === "section_edit" ? "feedback-item-section-edit" : ""} ${superseded ? "feedback-item-superseded" : ""}`} key={f.id}>
             <div className="feedback-meta">
                 <b>{f.mentor_name}</b>
-                <span className="fw-badge">{capitalize(f.feedback_type)}</span>
+                <span className={`fw-badge ${f.feedback_type === "section_edit" ? "fw-badge-section-edit" : ""}`}>{FEEDBACK_TYPE_LABEL[f.feedback_type] || capitalize(f.feedback_type)}</span>
                 {f.section && <span className="status-chip">{f.section}</span>}
                 <span className={`status-chip status-${f.status}`}>{capitalize(f.status)}</span>
                 {f.attempt_number && <span className="feedback-attempt-meta">Attempt #{f.attempt_number} &bull; {formatShortDate(f.created_at)}</span>}
             </div>
-            {f.feedback_type === "edit" && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Mentor's suggestion</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
+            {(f.feedback_type === "edit" || f.feedback_type === "section_edit") && <div className="rewrite-grid"><div className="rewrite-pane before"><span className="pane-label">Original</span><p className="rewrite-text">{f.original_text}</p></div><div className="rewrite-pane after"><span className="pane-label">Mentor's suggestion</span><p className="rewrite-text">{f.suggested_text}</p></div></div>}
             {f.comment && <p className="feedback-comment">{f.comment}</p>}
-            {f.status === "open" && <div className="composer-actions">
+            {superseded ? (
+                <p className="feedback-superseded-note">Section was replaced by mentor rewrite. Please view the Tailored CV preview.</p>
+            ) : f.status === "open" && <div className="composer-actions">
                 <button className="btn-primary" disabled={busyId === f.id} onClick={() => setStatus(f.id, "accepted")}><Check size={15} /> Accept</button>
                 <button className="btn-ghost" disabled={busyId === f.id} onClick={() => setStatus(f.id, "dismissed")}><X size={14} /> Dismiss</button>
             </div>}
@@ -1907,6 +2005,9 @@ function App() {
     const [autoCollapseDisabled, setAutoCollapseDisabled] = useState(() => localStorage.getItem(SIDEBAR_AUTO_COLLAPSE_DISABLED_KEY) === "true")
     const [exported, setExported] = useState(false)
     const [setupExpanded, setSetupExpanded] = useState(true)
+    // item 9/10: lets a signed-in user with no attempt yet browse Attempt History and reopen
+    // a past attempt straight from persisted data, with no upload and no new processing
+    const [viewingHistoryOnly, setViewingHistoryOnly] = useState(false)
     // Job Matching's own scrape/compare state, lifted up here (rather than kept local to
     // <JobMatching>) so switching tabs away and back never re-runs the scrape or comparison -
     // the tab body unmounts on every view switch, but this state doesn't live there anymore
@@ -1947,14 +2048,17 @@ function App() {
         return () => { window.removeEventListener("focusin", onFocusIn); clearTimeout(timer) }
     }, [])
 
-    // collapse the sidebar to icon-only the FIRST time the user scrolls into the results, so
-    // it stops competing for space with the workspace - but only ever once automatically.
-    // Manually re-expanding afterward (see toggleSidebar) permanently retires this listener.
+    // collapse the sidebar to icon-only the FIRST time the user scrolls past ~20% of the
+    // page height, so it stops competing for space with the workspace - but only ever once
+    // automatically per analysis session. Manually re-expanding afterward (see toggleSidebar)
+    // permanently retires this listener until the next fresh analysis/session.
     useEffect(() => {
         if (!result || autoCollapseDisabled) return undefined
         function onScroll() {
             if (recentFieldFocusRef.current) return
-            if (!hasAutoCollapsedRef.current && window.scrollY > 140) {
+            if (hasAutoCollapsedRef.current) return
+            const pageHeight = document.documentElement.scrollHeight
+            if (window.scrollY > pageHeight * 0.2) {
                 hasAutoCollapsedRef.current = true
                 setSidebarCollapsed(true)
             }
@@ -2073,7 +2177,10 @@ function App() {
                 provider,
                 local_endpoint: provider === "local" ? localEndpoint : "",
             })
-            const newResult = { ...gen.data.results, parsed_resume: upload.data.parsed, job_description: jobDescription, raw_text: upload.data.parsed.raw_text }
+            const newResult = {
+                ...gen.data.results, parsed_resume: upload.data.parsed, job_description: jobDescription, raw_text: upload.data.parsed.raw_text,
+                keyword_frequencies: computeKeywordFrequencies(gen.data.results.strong_matches || [], upload.data.parsed.raw_text),
+            }
             setResult(newResult)
             setAnalysisId(gen.data.analysis_id)
             setDecisions({})
@@ -2106,6 +2213,14 @@ function App() {
                 resume_id: res.data.resume_id,
                 raw_text: resultsData.raw_text || resultsData.parsed_resume?.raw_text || "",
             }
+            // keyword_frequencies from the Fast Cover Letter Workflow / a JD refresh is only
+            // ever computed client-side (never persisted) - recompute it here so a reopened
+            // historical attempt shows real per-keyword counts instead of all-zero. A genuine
+            // full analysis already has its own native keyword_frequencies in results_json -
+            // never overwrite that.
+            if (!newResult.keyword_frequencies && newResult.strong_matches) {
+                newResult.keyword_frequencies = computeKeywordFrequencies(newResult.strong_matches, newResult.raw_text)
+            }
 
             try {
                 const resumesList = await api.get("/analysis/resumes")
@@ -2134,29 +2249,50 @@ function App() {
         } catch (err) { setError(getError(err)) }
     }
 
+    // Smart Cache Reuse, Case A: the resume is the source of truth for cache invalidation,
+    // not the JD - so a JD-only change never reruns Resume Analysis. Reuses the current
+    // analysis entirely (rewrites/score/sections/analytics untouched server-side) and only
+    // regenerates Keyword Gap + Cover Letter via /analysis/:id/refresh-jd. Shared by the Cover
+    // Letter page's "Change Job Description" action and Job Matching's "Generate Cover
+    // Letter" shortcut below - returns true/false instead of throwing so each caller can
+    // decide its own busy-state/toast/navigation without duplicating the request itself.
+    async function refreshJobDescription(jdText, { company: companyOverride } = {}) {
+        const id = analysisId || result?.analysis_id
+        if (!id) return { ok: false, error: "No active attempt to update." }
+        try {
+            const payload = { job_description: jdText, provider, local_endpoint: localEndpoint }
+            const companyToSend = companyOverride ?? jobMatchState.company
+            if (companyToSend) payload.company = companyToSend
+            const res = await api.post(`/analysis/${id}/refresh-jd`, payload)
+            const updated = {
+                ...result,
+                ...res.data.results,
+                keyword_frequencies: computeKeywordFrequencies(res.data.results.strong_matches || [], result.raw_text),
+            }
+            setResult(updated)
+            setDocs(prev => ({ ...prev, cover_letter: res.data.cover_letter_text || "" }))
+            setJobDescription(jdText)
+            return { ok: true }
+        } catch (err) {
+            return { ok: false, error: getError(err) }
+        }
+    }
+
     // Job Matching's "Generate Cover Letter" shortcut: the scraped JD becomes the app's
     // active job_description (source of truth going forward), but nothing about the current
     // attempt is rerun or discarded - the existing analysis score, suggestions, and Tailored
-    // CV all persist exactly as they were. Only the Cover Letter itself regenerates, against
-    // the new JD, and only navigates there once that generation actually succeeds.
+    // CV all persist exactly as they were (Smart Cache Reuse Case A above). Only navigates
+    // there once generation actually succeeds.
     async function generateCoverLetterFromJobMatch(jdText) {
         setJobMatchBusyAction("cover-letter")
         try {
-            const payload = {
-                resume_json: result.parsed_resume,
-                job_description: jdText,
-                provider, local_endpoint: localEndpoint,
-                analysis_id: analysisId || result.analysis_id,
+            const { ok, error } = await refreshJobDescription(jdText)
+            if (ok) {
+                toast("Cover letter generated from Job Matching")
+                setView("Cover Letter")
+            } else {
+                toast(error, "error")
             }
-            if (jobMatchState.company) payload.company = jobMatchState.company
-            const res = await api.post("/generate/cover-letter", payload)
-            setDocs(prev => ({ ...prev, cover_letter: res.data.cover_letter_text }))
-            setJobDescription(jdText)
-            setResult(prev => prev ? { ...prev, job_description: jdText } : prev)
-            toast("Cover letter generated from Job Matching")
-            setView("Cover Letter")
-        } catch (err) {
-            toast(getError(err), "error")
         } finally {
             setJobMatchBusyAction("")
         }
@@ -2222,7 +2358,7 @@ function App() {
         <AuthBar user={user} onLogout={logout} />
         <Hero />
         <PipelineStepper file={file} busy={busy} result={result} docs={docs} exported={exported} />
-        {result && !setupExpanded ? (
+        {!viewingHistoryOnly && (result && !setupExpanded ? (
             <button className="setup-summary" onClick={() => setSetupExpanded(true)}>
                 <UploadCloud size={15} />
                 <span className="setup-summary-name">{file?.name || "Resume analysed"}</span>
@@ -2240,7 +2376,13 @@ function App() {
                     <input className="input-field" value={localEndpoint} onChange={e => setLocalEndpoint(e.target.value)} placeholder="Local API Endpoint" />
                     <small className="muted">Must be reachable by the server, not just your browser. Defaults to your machine's Ollama if you're running this app locally — for a hosted deployment, expose your local model with a tunnel (e.g. ngrok, Tailscale Funnel, Cloudflare Tunnel) and paste that URL here.</small>
                 </div>}
-                {!result && <span className="topbar-inline"><span className="muted">{user.is_guest ? "Browsing as " : "Signed in as "}<b>{user.display_name}</b></span><button className="btn-secondary" onClick={logout}>{user.is_guest ? <><LogIn size={13} /> Sign In</> : <><LogOut size={13} /> Sign out</>}</button></span>}
+                {/* item 9: before any analysis/generation exists there's nothing to show for
+                    "Signed in as" yet worth the space - a way back into past attempts (with
+                    no upload, no processing) is more useful here */}
+                {!result && <span className="topbar-inline">
+                    <button className="btn-secondary" onClick={() => setViewingHistoryOnly(true)}><History size={13} /> View Past Attempts</button>
+                    <button className="btn-secondary" onClick={logout}>{user.is_guest ? <><LogIn size={13} /> Sign In</> : <><LogOut size={13} /> Sign out</>}</button>
+                </span>}
             </div>
             {providerMeta?.byok && <div className="card key-card">
                 <span className="section-label"><KeyRound size={13} /> {providerMeta.label.replace(" (Own Key)", "")} API Key</span>
@@ -2261,9 +2403,16 @@ function App() {
             <ResumeSetup file={file} setFile={setFile} jobDescription={jobDescription} setJobDescription={setJobDescription} onAnalyse={analyse} onQuickCoverLetter={generateCoverLetterOnly} busy={busy || needsKey} quickBusy={quickBusy || needsKey} />
             {needsKey && <p className="warning-strip">Add a {providerMeta.label.replace(" (Own Key)", "")} API key above, or switch to Default (Free), before analysing.</p>}
             {result && <div className="setup-collapse-row"><button className="btn-ghost" onClick={() => setSetupExpanded(false)}>Hide setup</button></div>}
-        </>}
+        </>)}
         {error && <p className="warning-strip">{error}</p>}
-        {!result && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
+        {!result && !viewingHistoryOnly && <details className="card"><summary>Mentor Feedback &amp; Review Sessions</summary><div className="prelim-panels"><SessionJoin /><FeedbackInbox /></div></details>}
+        {!result && viewingHistoryOnly && <section className="mentor-workspace">
+            <div className="detail-head">
+                <button className="btn-secondary" onClick={() => setViewingHistoryOnly(false)}>← Back</button>
+                <h3 className="detail-title">Attempt History</h3>
+            </div>
+            <AttemptHistory history={history} onOpenAttempt={id => { setViewingHistoryOnly(false); openHistoryAttempt(id) }} />
+        </section>}
         {result && <>
             <TopNav view={view} setView={setView} />
             <div className={`workspace ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
@@ -2273,15 +2422,13 @@ function App() {
                     {view === "Suggestions" && (isCoverLetterOnlyAttempt
                         ? <><h2 className="view-title">Review Suggestions</h2><AnalysisRequiredGate icon={MessageSquareText} busy={busy} message="This attempt only generated a Cover Letter - run a full analysis on the same resume to get rewrite suggestions." onAnalyse={() => analyse(undefined, { landOn: "Suggestions" })} /></>
                         : <RewriteReview result={result} file={file} decisions={decisions} setDecisions={setDecisions} analysisId={analysisId} />)}
-                    {view === "Keyword Gap" && (isCoverLetterOnlyAttempt
-                        ? <><h2 className="view-title">Keyword Gap</h2><AnalysisRequiredGate icon={SearchCheck} busy={busy} message="Keyword-gap matching against a job description requires a full resume analysis." onAnalyse={() => analyse(undefined, { landOn: "Keyword Gap" })} /></>
-                        : <KeywordGap result={result} />)}
+                    {view === "Keyword Gap" && <KeywordGap result={result} />}
                     {view === "Extracted Sections" && <ExtractedSections result={result} />}
                     {view === "Tailored CV" && (isCoverLetterOnlyAttempt
                         ? <><h2 className="view-title">Generate Tailored CV</h2><AnalysisRequiredGate icon={FileEdit} busy={busy} message="A Tailored CV is built from rewrite suggestions, which need a full resume analysis first." onAnalyse={() => analyse(undefined, { landOn: "Tailored CV" })} /></>
                         : <DocumentGenerator type="cv" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cv} setText={t => setDocs({ ...docs, cv: t })} onExport={() => setExported(true)} fullName={fullName} />)}
-                    {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} />}
-                    {view === "Mentor Feedback" && <FeedbackInbox />}
+                    {view === "Cover Letter" && <DocumentGenerator type="cover-letter" result={result} provider={provider} localEndpoint={localEndpoint} decisions={decisions} analysisId={analysisId} text={docs.cover_letter} setText={t => setDocs({ ...docs, cover_letter: t })} onExport={() => setExported(true)} fullName={fullName} company={jobMatchState.company} onChangeJobDescription={refreshJobDescription} />}
+                    {view === "Mentor Feedback" && <FeedbackInbox analysisId={analysisId || result?.analysis_id} />}
                     {view === "Insights" && (isCoverLetterOnlyAttempt
                         ? <><h2 className="view-title">Insights</h2><AnalysisRequiredGate icon={BarChart3} busy={busy} message="Score trends, ATS match, and section-strength insights need a full resume analysis." onAnalyse={() => analyse(undefined, { landOn: "Insights" })} /></>
                         : <Insights result={result} history={history} decisions={decisions} />)}

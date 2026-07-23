@@ -169,6 +169,36 @@ router.post("/run", authenticateToken, llmLimiter, (req, res) => {
     res.status(202).json({ job_id: row.lastInsertRowid, status: "queued" })
 })
 
+// shared by the Fast Cover Letter Workflow and the JD-refresh path below: the lightweight
+// keyword-gap the engine's /compare-resume-jd endpoint already produces for Job Matching,
+// reshaped into the same jd_keywords/missing_keywords fields KeywordGap expects - this never
+// touches analyse()'s own (separate, heavier) JD-keyword-extraction step
+async function computeKeywordGapFields(engineUrl, resumeJson, jobDescription, engineProvider, localEndpoint, apiKey) {
+    if (!jobDescription || !jobDescription.trim()) return {}
+    try {
+        const res = await fetchEngineWithRetry(`${engineUrl}/compare-resume-jd`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                resume_text: resumeJson?.raw_text || "", jd_text: jobDescription,
+                provider: engineProvider, local_endpoint: localEndpoint || "", api_key: apiKey,
+            }),
+        })
+        if (!res.ok) return {}
+        const data = await res.json()
+        return {
+            jd_keywords: [...(data.strong_matches || []), ...(data.missing_skills || [])],
+            missing_keywords: data.missing_skills || [],
+            match_pct: data.match_pct || 0,
+            strong_matches: data.strong_matches || [],
+            tailoring_tips: data.tailoring_tips || [],
+            company: data.company || "",
+        }
+    } catch {
+        return {}
+    }
+}
+
 // Fast Cover Letter Workflow (Phase Y): a "cover_letter_only" attempt never touches
 // analyse() at all - no rewrite suggestions, no scoring, no keyword-gap, no embeddings - it's
 // exactly the one gen-cover-letter LLM call /generate/cover-letter already makes, so this
@@ -207,11 +237,16 @@ router.post("/quick-cover-letter", authenticateToken, llmLimiter, async (req, re
         })
         if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
         const data = await engineRes.json()
+        // the one other piece of data this workflow is explicitly allowed to produce -
+        // Keyword Gap - via the same lightweight compare-resume-jd call Job Matching already
+        // uses, never analyse()'s own (much heavier) JD-keyword-extraction step
+        const keywordGap = await computeKeywordGapFields(engineUrl, resume_json, job_description, engineProvider, local_endpoint, apiKey)
 
         const db = getDb()
         // only what's actually derivable without running analyse() at all: the parsed
-        // resume + its extracted sections (parsing already happened at upload time) - never
-        // rewrites/score/keyword data, since none of that pipeline ever ran for this attempt
+        // resume + its extracted sections (parsing already happened at upload time) plus the
+        // lightweight keyword gap above - never rewrites/score/bullet data, since none of that
+        // pipeline (or ATS scoring/analytics) ever ran for this attempt
         const resultsForStorage = {
             // contact/sections mirror the top-level shape a full analyse() response has (see
             // analyser.py), so ResultsSidebar/ExtractedSections/etc. work unmodified - both are
@@ -221,6 +256,7 @@ router.post("/quick-cover-letter", authenticateToken, llmLimiter, async (req, re
             parsed_resume: resume_json,
             job_description: job_description || "",
             attempt_type: "cover_letter_only",
+            ...keywordGap,
         }
         const row = db.prepare(
             "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, content_hash, attempt_type, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, '', 'cover_letter_only', datetime('now'))"
@@ -236,6 +272,68 @@ router.post("/quick-cover-letter", authenticateToken, llmLimiter, async (req, re
         res.json({ analysis_id: analysisId, cover_letter_text: data.cover_letter_text || "", results: resultsForStorage })
     } catch (err) {
         res.status(500).json({ error: "Cover letter generation failed. Please try again." })
+    }
+})
+
+// Smart Cache Reuse, Case A (resume unchanged, JD changed): the resume is the source of
+// truth for cache invalidation, not the JD - so changing only the JD never reruns the
+// expensive Resume Analysis pipeline. This updates the SAME analyses row in place (same
+// attempt, same id) and only regenerates the two things that actually depend on the JD -
+// Keyword Gap and Cover Letter - while rewrites/score/sections/analytics stay exactly as
+// they were. Used by both the Cover Letter page's "Change Job Description" action and Job
+// Matching's "Generate Cover Letter" shortcut.
+router.post("/:id/refresh-jd", authenticateToken, llmLimiter, async (req, res) => {
+    const analysisId = parseInt(req.params.id)
+    const row = getOwnedAnalysis(analysisId, req.user.id)
+    if (!row) return res.status(404).json({ error: "Analysis not found." })
+    const { job_description, provider, local_endpoint, company } = req.body
+    if (!PROVIDER_CHOICES.has(provider)) {
+        return res.status(400).json({ error: "Unknown provider." })
+    }
+    if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
+        return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
+    }
+    let results = {}
+    try { results = JSON.parse(row.results_json) } catch {}
+    const resumeJson = results.parsed_resume
+    if (!resumeJson) return res.status(409).json({ error: "This attempt has no stored resume data to regenerate against." })
+
+    let engineProvider, apiKey
+    try {
+        ({ engineProvider, apiKey } = resolveProviderForRequest(req.user.id, provider))
+    } catch (err) {
+        if (err instanceof ProviderResolutionError) return res.status(err.status).json({ error: err.message })
+        throw err
+    }
+
+    const engineUrl = req.app.locals.engineUrl
+    try {
+        const jd = job_description || ""
+        const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cover-letter`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ resume_json: resumeJson, job_description: jd, provider: engineProvider, local_endpoint: local_endpoint || "", api_key: apiKey }),
+        })
+        if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
+        const data = await engineRes.json()
+        const keywordGap = await computeKeywordGapFields(engineUrl, resumeJson, jd, engineProvider, local_endpoint, apiKey)
+
+        const db = getDb()
+        const updatedResults = { ...results, job_description: jd, ...keywordGap }
+        if (!jd.trim()) { updatedResults.jd_keywords = []; updatedResults.missing_keywords = [] }
+        // only a resume_analysis row's content_hash feeds /run's cache-hit lookup - keep a
+        // cover_letter_only row's hash untouched ('') since it was never eligible there anyway
+        const newHash = row.attempt_type === "cover_letter_only" ? row.content_hash
+            : analysisContentHash({ resumeId: row.resume_id, jobDescription: jd, provider, model: row.model, useCritic: false, localEndpoint: local_endpoint })
+        db.prepare("UPDATE analyses SET job_description = ?, content_hash = ?, results_json = ? WHERE id = ?")
+            .run(jd, newHash, JSON.stringify(updatedResults), analysisId)
+        db.prepare(
+            "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+        ).run(analysisId, req.user.id, "cover_letter", data.cover_letter_text || "", String(company || "").slice(0, 200))
+
+        res.json({ analysis_id: analysisId, cover_letter_text: data.cover_letter_text || "", results: updatedResults })
+    } catch (err) {
+        res.status(500).json({ error: "Cover letter regeneration failed. Please try again." })
     }
 })
 

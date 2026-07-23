@@ -910,6 +910,7 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
 
 /* ---- mentor workspace & feedback ---- */
 .detail-head { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.1rem; }
+.mentor-more-toggle-btn { margin-left: auto; }
 .detail-title { font-family: var(--font-ui); font-weight: 600; font-size: 1.35rem; }
 .btn-small { padding: 0.32rem 0.7rem; font-size: 0.75rem; }
 .session-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; }
@@ -925,6 +926,14 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
 .status-chip.status-dismissed { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
 .status-chip.status-open { border-color: rgba(139,92,246,0.35); color: #7c3aed; background: rgba(139,92,246,0.08); }
 
+/* ---- Section Edit: visually distinct from ordinary bullet-level feedback (item 5), and
+   the bullet suggestions it supersedes once accepted (item 6) ---- */
+.feedback-item-section-edit { border-color: rgba(139,92,246,0.4); background: rgba(139,92,246,0.04); }
+.fw-badge-section-edit { background: rgba(139,92,246,0.14); color: #7c3aed; }
+.feedback-item-superseded { opacity: 0.6; }
+.feedback-item-superseded .rewrite-text { text-decoration: line-through; }
+.feedback-superseded-note { font-size: 0.8rem; color: var(--c-text-muted); font-style: italic; margin-top: 0.6rem; }
+
 .composer { margin-top: 1.1rem; }
 .composer-row { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
 .composer-row .input-field { min-width: 0; }
@@ -938,6 +947,10 @@ textarea.doc-editor { min-height: 640px; margin: 0; line-height: 1.6; font-famil
 .doc-subhead { font-family: var(--font-ui); font-weight: 600; font-size: var(--text-card); margin: 1.4rem 0 0.6rem; }
 .btn-block-gap { margin-top: 0.75rem; }
 .generate-btn { margin-top: 1rem; }
+.doc-generate-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.doc-generate-row .generate-btn { margin-top: 1rem; }
+.jd-editor-card { margin-top: 0.75rem; }
+.jd-editor-card textarea.input-field { min-height: 160px; margin-top: 0.5rem; }
 .scrape-row { display: grid; grid-template-columns: 1fr auto; gap: 0.6rem; align-items: center; margin-top: 0.6rem; margin-bottom: 0.75rem; }
 .model-bar { flex-wrap: wrap; row-gap: 0.75rem; }
 section > .section-label { margin-top: 0.25rem; }
@@ -992,20 +1005,23 @@ details.card > summary {
 .btn-destructive:hover { background: #FEE2E2; border-color: rgba(220,38,38,0.5); }
 .btn-destructive:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ---- top nav: sticky + integrated (not a floating overlapping pill), grouped by workflow stage ---- */
+/* ---- top nav: sticky + integrated (not a floating overlapping pill), grouped by workflow
+   stage. Collapsed, this is a single, sensibly-padded row - .nav-row never wraps (.nav-tabs
+   scrolls horizontally in the rare case it doesn't fit rather than wrapping onto a second
+   line), so the bar never looks "permanently expanded". Only .nav-more-row, a genuine second
+   row below it, grows in when the mentor/candidate presses the expand arrow. ---- */
 .top-nav {
     position: sticky;
     top: 0;
     z-index: 30;
     background: linear-gradient(135deg, #0a0a0f 0%, #111827 45%, #172554 100%);
     border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-    padding: var(--sp-2) var(--sp-3);
+    padding: 0.6rem var(--sp-3);
     margin: 0 0 var(--sp-3);
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--sp-4);
+    flex-direction: column;
     box-shadow: var(--shadow-md);
+    transition: padding 0.25s ease;
 }
 .nav-pill svg { flex-shrink: 0; }
 
@@ -1192,23 +1208,28 @@ details.card > summary {
 .processing-stage-label { font-weight: 600; }
 .processing-timer { font-size: 0.74rem; opacity: 0.85; display: inline-flex; align-items: center; gap: 0.3rem; font-variant-numeric: tabular-nums; }
 
-/* ---- nav: icon/title spacing, single-row + always-visible More toggle ----
-   the nav never auto-hides/floats (see App.jsx - the old scroll-driven navHidden effect
-   was removed entirely); the only animated state here is the More group expanding in place */
+/* ---- nav: icon/title spacing, single-row when collapsed, a real second row when expanded ----
+   the nav never auto-hides/floats (see App.jsx - the old scroll-driven navHidden effect was
+   removed entirely). .nav-row (the always-visible tabs + toggle) never wraps, so the bar's
+   collapsed height is fixed and sensible; .nav-more-row is a separate row that height-animates
+   in below it only when the mentor/candidate presses the expand arrow. */
 .nav-pill { display: inline-flex; align-items: center; gap: 0.55rem; }
-.nav-row { display: flex; align-items: center; gap: 0.4rem; width: 100%; }
+.nav-row { display: flex; align-items: center; gap: 0.4rem; width: 100%; flex-wrap: nowrap; }
 /* centers the always-visible tabs regardless of the toggle's fixed right-hand position -
-   .nav-more-toggle's margin-left:auto would otherwise defeat justify-content on a shared row */
-.nav-tabs { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.4rem; flex: 1; min-width: 0; }
-.nav-more-group {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
-    max-width: 0; opacity: 0; overflow: hidden; pointer-events: none;
-    transition: max-width 0.35s ease, opacity 0.25s ease;
+   .nav-more-toggle's margin-left:auto would otherwise defeat justify-content on a shared row.
+   overflow-x:auto is a safety net for narrow desktop widths - it scrolls instead of wrapping
+   onto a second line, which is what used to make the "collapsed" bar look permanently tall. */
+.nav-tabs { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 0.4rem; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.nav-tabs::-webkit-scrollbar { display: none; }
+.nav-more-row {
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.4rem;
+    max-height: 0; opacity: 0; overflow: hidden; margin-top: 0; pointer-events: none;
+    transition: max-height 0.3s ease, opacity 0.25s ease, margin-top 0.3s ease;
 }
-.nav-more-group.open { max-width: 600px; opacity: 1; overflow: visible; pointer-events: auto; }
+.nav-more-row.open { max-height: 200px; opacity: 1; margin-top: 0.6rem; overflow: visible; pointer-events: auto; }
 .nav-more-label {
     color: rgba(255,255,255,0.38); font-family: var(--font-ui); font-size: 0.64rem;
-    font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; flex-shrink: 0; margin-left: 0.3rem;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; flex-shrink: 0;
 }
 .nav-more-toggle {
     background: rgba(255,255,255,0.06); border: 1px solid transparent; border-radius: 10px;
@@ -1269,7 +1290,6 @@ details.card > summary {
 .mentor-preview-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
 .mentor-preview-editor { min-height: 320px; }
 .mentor-preview-actions { display: flex; gap: 0.6rem; margin: var(--sp-2) 0; }
-.mentor-more-row { margin: var(--sp-3) 0 var(--sp-1); }
 .mentor-more-panel { margin-top: var(--sp-2); }
 .mentor-more-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: var(--sp-2); }
 .mentor-more-tabs button {
@@ -1285,6 +1305,18 @@ details.card > summary {
     cursor: pointer; margin-left: auto; transition: all 0.15s;
 }
 .pill.suggest-edit-pill:hover { background: rgba(167,139,250,0.1); }
+/* item 73: a FILLED pill, visually distinct from the outline per-bullet Edit pill above,
+   since it's the other/independent editing level (a whole section, not one bullet) */
+.pill.edit-section-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: var(--c-primary); border: 1px solid var(--c-primary); border-radius: 999px;
+    padding: 0.3rem 0.8rem; font-family: var(--font-ui); font-size: 0.74rem; font-weight: 700;
+    color: #fff; cursor: pointer; transition: all 0.15s; margin: 0.5rem 0 0.7rem;
+}
+.pill.edit-section-pill:hover { background: var(--c-primary-dark); border-color: var(--c-primary-dark); }
+/* item 75: header + PDF/Rewritten toggle + PDF viewer stay pinned together while scrolling
+   Extracted Sections - top offset clears the fixed single-row nav bar */
+.mentor-pdf-sticky { position: sticky; top: 4.75rem; z-index: 5; }
 .mentor-compose-fab {
     position: fixed; bottom: 2rem; right: 2rem; z-index: 400;
     width: 56px; height: 56px; border-radius: 50%;
@@ -1355,7 +1387,6 @@ details.card > summary {
     .sidebar-collapsed { width: 100%; padding: 0.75rem 1rem; }
     .sidebar-collapsed .sidebar-content-fade { flex-direction: row; justify-content: space-between; }
     .sidebar-collapsed-icons { flex-direction: row; }
-    .top-nav { gap: var(--sp-2); }
     .view-title { font-size: 1.7rem; }
     .split-editor { grid-template-columns: 1fr; }
     .mobile-editor-toggle { display: flex; }
@@ -1396,13 +1427,12 @@ details.card > summary {
         border-radius: 0; margin: 0; z-index: 60;
         padding: 0.35rem var(--sp-2);
     }
-    /* wrap, don't scroll-or-clip: with the More group open this row holds 8 items (5
-       always-visible + 3 More + the toggle) at icon-only widths, which doesn't fit one
-       line on a phone - wrapping keeps every pill on-screen and tappable instead of
-       spilling off-screen unreachably. space-around gives a native tab-bar look; the
-       desktop/tablet default (.nav-tabs's own centered justify-content) isn't ideal at
-       this width since a bottom-docked bar should fill the full available width evenly. */
+    /* space-around gives a native tab-bar look, filling the full available width evenly -
+       the desktop/tablet default (.nav-tabs's own centered justify-content) isn't ideal here.
+       .nav-more-row (3 items) grows in as its own row above the main tab row when opened,
+       same accordion mechanism as desktop, just docked to the bottom instead of the top. */
     .nav-tabs { justify-content: space-around; }
+    .nav-more-row { justify-content: space-around; }
     .nav-pill { flex-direction: column; gap: 0.15rem; padding: 0.3rem 0.4rem; min-height: 44px; justify-content: center; }
     .nav-pill span { font-size: 0.6rem; }
     .nav-pill:not(.active) span { display: none; }
