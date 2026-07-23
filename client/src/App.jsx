@@ -62,8 +62,12 @@ const PIPELINE_STEPS = [
 function formatDuration(ms) {
     const totalSeconds = ms / 1000
     if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = Math.round(totalSeconds % 60)
+    // round the whole duration first, then split into minutes/seconds - rounding each part
+    // independently (Math.floor for minutes, Math.round for the leftover seconds) can carry
+    // the seconds up to 60 (e.g. 119.6s -> "1 min 60 s" instead of "2 min 0 s")
+    const rounded = Math.round(totalSeconds)
+    const minutes = Math.floor(rounded / 60)
+    const seconds = rounded % 60
     return `${minutes} min ${seconds} s`
 }
 
@@ -717,8 +721,11 @@ function RewriteReview({ result, file, decisions, setDecisions, analysisId }) {
         }).catch(() => setMentorEdits({}))
     }, [analysisId])
 
-    // reset to the first suggestion on a fresh analysis instead of a stale index
-    useEffect(() => { setActive(0) }, [analysisId])
+    // reset to the first suggestion on a fresh analysis instead of a stale index - also
+    // clears any decision-save error left over from the previous attempt, since this
+    // component can stay mounted across a reanalysis (whenever the user reanalyses while
+    // already on the Suggestions tab, the view doesn't change so this never remounts)
+    useEffect(() => { setActive(0); setError("") }, [analysisId])
 
     useEffect(() => {
         let cancelled = false
@@ -1218,13 +1225,25 @@ function FeedbackComposer({ candidateId, analysisId, prefill, onSent }) {
     const [comment, setComment] = useState("")
     const [status, setStatus] = useState("")
 
+    // CandidateDetail keeps a single FeedbackComposer instance mounted and just swaps its
+    // `prefill` prop when the mentor jumps from editing one suggestion/section straight to
+    // another without closing the composer first (startEdit/startSectionEdit never unmount
+    // it) - so this must also clear the draft-only fields (they aren't derived from prefill
+    // and would otherwise leak the previous suggestion's typed text into the new one's
+    // submission). Keyed on prefill?.key (a stable id), not the prefill object itself, so an
+    // unrelated parent re-render (which recreates the inline prefill object every time) can't
+    // wipe out an in-progress draft for the SAME suggestion.
     useEffect(() => {
         if (prefill) {
             setType(prefill.type || "comment")
             setSection(prefill.section || "")
             setOriginalText(prefill.original || "")
+            setSuggestedText("")
+            setComment("")
+            setStatus("")
         }
-    }, [prefill])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [prefill?.key])
 
     async function send() {
         setStatus("")
@@ -1436,6 +1455,14 @@ function CandidateDetail({ candidate, onBack }) {
             const res = await api.get(`/mentor/candidates/${candidate.id}/diff?from=${diffFrom}&to=${diffTo}`)
             setDiff(res.data)
             setAnalysis(null)
+            // switching to the diff view hides the composer (editingItem/rewrites both go
+            // empty once analysis is null), but leaving activeComposerKey/activeSectionEdit
+            // set keeps the "Compose general feedback" FAB hidden (its render condition is
+            // `!activeComposerKey && !activeSectionEdit`) until an analysis is reopened -
+            // same cleanup openAnalysis() already does when switching analyses
+            setActiveComposerKey(null)
+            setActiveSectionEdit(null)
+            previewModeBeforeEdit.current = null
         } catch (err) { setError(getError(err)) }
     }
 
@@ -2167,7 +2194,13 @@ function App() {
             setSidebarCollapsed(false)
             setSetupExpanded(false)
             setExported(false)
-            setJobDescription(jd)
+            // only sync the override JD (e.g. Job Matching's scraped JD) back into the main
+            // textarea state - `jd` here was captured from `jobDescription` at the moment
+            // analyse() was called, and the request above can take a long time (up to the
+            // full 10-minute poll timeout) during which the JD textarea stays editable; when
+            // no override was given, unconditionally calling setJobDescription(jd) would
+            // silently overwrite whatever the user typed into that textarea while waiting
+            if (jdOverride !== undefined) setJobDescription(jd)
             hasAutoCollapsedRef.current = false
             // restore any docs already generated for this analysis so tabs don't wipe them
             try {
