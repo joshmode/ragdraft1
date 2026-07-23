@@ -871,12 +871,20 @@ def gen_cv(
     model: str = "",
     api_key: str = "",
     mentor_overrides: dict[str, str] | None = None,
+    section_overrides: dict[str, str] | None = None,
 ) -> str:
     """generate a tailored CV from resume data and accepted rewrites.
 
     mentor_overrides maps a rewrite suggestion's id to text a mentor suggested and the
-    candidate has already accepted - that wins over the LLM's own rewrite for that bullet."""
+    candidate has already accepted - that wins over the LLM's own rewrite for that bullet.
+
+    section_overrides maps a SECTION NAME to a mentor-rewritten replacement for the whole
+    section, once the candidate has accepted that mentor Section Edit. It takes precedence
+    over every bullet-level mechanism above (rewrite_decisions, mentor_overrides) for that
+    section - the mentor's rewritten section becomes that section's sole source of truth,
+    and per-bullet AI rewrites for it are never applied again."""
     has_jd = bool(job_description.strip())
+    section_overrides = section_overrides or {}
 
     # build resume text with only accepted rewrites
     cv_text = ""
@@ -890,6 +898,11 @@ def gen_cv(
 
     for sec, lines in resume.sections.items():
         cv_text += f"\n=== {sec} ===\n"
+        if sec in section_overrides:
+            for line in section_overrides[sec].splitlines():
+                if line.strip():
+                    cv_text += line + "\n"
+            continue
         applied, acc_sec, dis_sec = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions, mentor_overrides)
         acc_items.extend(acc_sec)
         dis_items.extend(dis_sec)
@@ -950,10 +963,13 @@ def gen_cv(
             if sec.upper() not in result.upper()
         ]
         for sec in missing_secs:
-            lines = resume.sections.get(sec, [])
-            if not lines:
-                continue
-            applied, _, _ = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions, mentor_overrides)
+            if sec in section_overrides:
+                applied = [line for line in section_overrides[sec].splitlines() if line.strip()]
+            else:
+                lines = resume.sections.get(sec, [])
+                if not lines:
+                    continue
+                applied, _, _ = _apply_rewrites(sec, lines, acc_map, rewrite_suggestions, rewrite_decisions, mentor_overrides)
             result += f"\n\n## {sec}\n---\n" + "\n".join(f"- {line}" for line in applied)
         return result
     except Exception as e:

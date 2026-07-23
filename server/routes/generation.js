@@ -54,6 +54,22 @@ function mentorOverridesFor(analysisId, candidateId) {
     return Object.fromEntries(rows.map(r => [r.suggestion_key, r.suggested_text]))
 }
 
+// a mentor's Section Edit the candidate has accepted becomes that section's sole source of
+// truth (see mentor.js's Section Edit handling) - it takes precedence over every bullet-level
+// mechanism above for that section, so the engine skips per-bullet rewrite application
+// entirely there and uses this text verbatim instead
+function mentorSectionOverridesFor(analysisId, candidateId) {
+    if (!analysisId) return {}
+    const rows = getDb().prepare(`
+        SELECT section, suggested_text FROM mentor_feedback
+        WHERE analysis_id = ? AND candidate_id = ? AND feedback_type = 'section_edit'
+          AND status = 'accepted' AND section != ''
+        ORDER BY updated_at ASC, id ASC
+    `).all(analysisId, candidateId)
+    // last accepted section edit per section wins if a section was edited more than once
+    return Object.fromEntries(rows.map(r => [r.section, r.suggested_text]))
+}
+
 // the mentor workspace's "Rewritten Preview" editor (see mentor.js's /preview endpoint) can
 // produce a whole-document edit, stored as a single mentor_feedback row keyed
 // "preview:<analysisId>" rather than a per-bullet suggestion_key - _apply_rewrites has no
@@ -94,6 +110,7 @@ router.post("/cv", authenticateToken, llmLimiter, async (req, res) => {
         rewrite_suggestions: req.body.rewrite_suggestions || null,
         rewrite_decisions: req.body.rewrite_decisions || null,
         mentor_overrides: mentorOverridesFor(analysisId, req.user.id),
+        section_overrides: mentorSectionOverridesFor(analysisId, req.user.id),
     })
     if (!enginePayload) return
 
