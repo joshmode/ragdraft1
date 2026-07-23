@@ -449,9 +449,11 @@ def parse_pdf(pdf_file) -> ParsedResume:
         return result
 
     all_lines: list[str] = []
-    for page in doc:
-        all_lines.extend(_sorted_blocks(page))
-    doc.close()
+    try:
+        for page in doc:
+            all_lines.extend(_sorted_blocks(page))
+    finally:
+        doc.close()
 
     if _is_scan(all_lines):
         if not _ocr_installed():

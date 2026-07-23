@@ -33,12 +33,16 @@ router.get("/:analysisId", authenticateToken, (req, res) => {
 
 router.post("/", authenticateToken, (req, res) => {
     const { analysis_id, suggestion_key, comment, section } = req.body
+    // analysis_id is parsed JSON, not just a string/number - an object or array (e.g. a client
+    // sending analysis_id: {}) passed straight into better-sqlite3's bind list throws a
+    // RangeError synchronously instead of failing validation cleanly below
+    const analysisId = (typeof analysis_id === "number" || typeof analysis_id === "string") ? parseInt(analysis_id) : NaN
 
     if (typeof suggestion_key !== "string" || typeof comment !== "string" ||
-        !analysis_id || !suggestion_key || !comment.trim()) {
+        !analysisId || !suggestion_key || !comment.trim()) {
         return res.status(400).json({ error: "analysis_id, suggestion_key, and comment are required." })
     }
-    if (!canAccessAnalysis(analysis_id, req.user)) {
+    if (!canAccessAnalysis(analysisId, req.user)) {
         return res.status(404).json({ error: "Analysis not found." })
     }
 
@@ -46,7 +50,7 @@ router.post("/", authenticateToken, (req, res) => {
     const stmt = db.prepare(
         "INSERT INTO annotations (analysis_id, user_id, suggestion_key, comment, section, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
     )
-    const result = stmt.run(analysis_id, req.user.id, suggestion_key, comment.trim(), typeof section === "string" ? section.slice(0, 100) : "")
+    const result = stmt.run(analysisId, req.user.id, suggestion_key, comment.trim(), typeof section === "string" ? section.slice(0, 100) : "")
 
     res.status(201).json({ id: result.lastInsertRowid, ok: true })
 })

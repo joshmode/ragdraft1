@@ -347,9 +347,18 @@ router.post("/feedback", authenticateToken, requireRole("mentor"), (req, res) =>
     if (type === "comment" && !String(comment || "").trim()) {
         return res.status(400).json({ error: "Comment cannot be empty." })
     }
+    // canAccessAnalysis alone only proves the mentor can reach *some* analysis in one of
+    // their active sessions - it doesn't prove that analysis belongs to this candidate_id,
+    // so without the extra user_id check a request could tag feedback meant for one
+    // candidate onto another candidate's analysis_id. Guarding on the raw analysis_id (not
+    // just the parsed one) also makes sure a non-numeric analysis_id is rejected instead of
+    // silently parsed to NaN and treated as "no analysis".
     const analysisId = analysis_id ? parseInt(analysis_id) : null
-    if (analysisId && !canAccessAnalysis(analysisId, req.user)) {
-        return res.status(404).json({ error: "Analysis not found." })
+    if (analysis_id) {
+        const analysisRow = analysisId ? canAccessAnalysis(analysisId, req.user) : null
+        if (!analysisRow || analysisRow.user_id !== candidateId) {
+            return res.status(404).json({ error: "Analysis not found." })
+        }
     }
     const db = getDb()
     const row = db.prepare(`

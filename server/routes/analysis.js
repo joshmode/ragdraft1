@@ -320,7 +320,17 @@ router.post("/:id/refresh-jd", authenticateToken, llmLimiter, async (req, res) =
 
         const db = getDb()
         const updatedResults = { ...results, job_description: jd, ...keywordGap }
-        if (!jd.trim()) { updatedResults.jd_keywords = []; updatedResults.missing_keywords = [] }
+        // clearing the JD entirely must invalidate every Keyword Gap field computeKeywordGapFields
+        // can produce, not just jd_keywords/missing_keywords - otherwise match_pct/strong_matches/
+        // tailoring_tips/company keep showing stale numbers from whatever JD was active before
+        if (!jd.trim()) {
+            updatedResults.jd_keywords = []
+            updatedResults.missing_keywords = []
+            updatedResults.match_pct = 0
+            updatedResults.strong_matches = []
+            updatedResults.tailoring_tips = []
+            updatedResults.company = ""
+        }
         // only a resume_analysis row's content_hash feeds /run's cache-hit lookup - keep a
         // cover_letter_only row's hash untouched ('') since it was never eligible there anyway
         const newHash = row.attempt_type === "cover_letter_only" ? row.content_hash
@@ -416,8 +426,14 @@ router.get("/insights/overview", authenticateToken, (req, res) => {
 })
 
 router.get("/insights/delta", authenticateToken, (req, res) => {
-    const from = getOwnedAnalysis(req.query.from, req.user.id)
-    const to = getOwnedAnalysis(req.query.to, req.user.id)
+    // req.query.from/to can come back as an object or array (e.g. ?from[x]=1, or a repeated
+    // ?from=1&from=2 key) under Express's default qs query-string parser - passing that
+    // straight into better-sqlite3's bind list throws a RangeError synchronously instead of
+    // a clean 404, so parseInt down to a scalar first
+    const fromId = parseInt(req.query.from)
+    const toId = parseInt(req.query.to)
+    const from = fromId ? getOwnedAnalysis(fromId, req.user.id) : null
+    const to = toId ? getOwnedAnalysis(toId, req.user.id) : null
     if (!from || !to) return res.status(404).json({ error: "Analysis not found." })
     let fromResults = {}
     let toResults = {}
