@@ -169,6 +169,76 @@ router.post("/run", authenticateToken, llmLimiter, (req, res) => {
     res.status(202).json({ job_id: row.lastInsertRowid, status: "queued" })
 })
 
+// Fast Cover Letter Workflow (Phase Y): a "cover_letter_only" attempt never touches
+// analyse() at all - no rewrite suggestions, no scoring, no keyword-gap, no embeddings - it's
+// exactly the one gen-cover-letter LLM call /generate/cover-letter already makes, so this
+// stays a plain synchronous request/response instead of inventing a job/polling flow. It still
+// creates a real (minimal) analyses row so the result can reuse generated_documents/history/
+// attempt-numbering unmodified rather than forking a parallel storage path for it.
+router.post("/quick-cover-letter", authenticateToken, llmLimiter, async (req, res) => {
+    const { resume_json, job_description, provider, local_endpoint, resume_id, company } = req.body
+    const resumeId = parseInt(resume_id)
+    if (!resumeId || !getOwnedResume(resumeId, req.user.id)) {
+        return res.status(404).json({ error: "Resume not found." })
+    }
+    if (!PROVIDER_CHOICES.has(provider)) {
+        return res.status(400).json({ error: "Unknown provider." })
+    }
+    if (provider === "local" && process.env.ALLOW_LOCAL_PROVIDER !== "true") {
+        return res.status(403).json({ error: "Local model endpoints are disabled for this deployment." })
+    }
+    let engineProvider, apiKey
+    try {
+        ({ engineProvider, apiKey } = resolveProviderForRequest(req.user.id, provider))
+    } catch (err) {
+        if (err instanceof ProviderResolutionError) return res.status(err.status).json({ error: err.message })
+        throw err
+    }
+
+    const engineUrl = req.app.locals.engineUrl
+    try {
+        const engineRes = await fetchEngineWithRetry(`${engineUrl}/gen-cover-letter`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                resume_json, job_description: job_description || "",
+                provider: engineProvider, local_endpoint: local_endpoint || "", api_key: apiKey,
+            }),
+        })
+        if (!engineRes.ok) return res.status(engineRes.status).json(await engineRes.json())
+        const data = await engineRes.json()
+
+        const db = getDb()
+        // only what's actually derivable without running analyse() at all: the parsed
+        // resume + its extracted sections (parsing already happened at upload time) - never
+        // rewrites/score/keyword data, since none of that pipeline ever ran for this attempt
+        const resultsForStorage = {
+            // contact/sections mirror the top-level shape a full analyse() response has (see
+            // analyser.py), so ResultsSidebar/ExtractedSections/etc. work unmodified - both are
+            // fully derivable from parsing alone, no analyse() run required
+            contact: resume_json?.contact || {},
+            sections: resume_json?.sections || {},
+            parsed_resume: resume_json,
+            job_description: job_description || "",
+            attempt_type: "cover_letter_only",
+        }
+        const row = db.prepare(
+            "INSERT INTO analyses (resume_id, user_id, results_json, job_description, provider, model, score_total, content_hash, attempt_type, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, '', 'cover_letter_only', datetime('now'))"
+        ).run(resumeId, req.user.id, JSON.stringify(resultsForStorage), job_description || "", provider || "", "")
+        const analysisId = row.lastInsertRowid
+        resultsForStorage.analysis_id = analysisId
+        resultsForStorage.resume_id = resumeId
+        db.prepare("UPDATE analyses SET results_json = ? WHERE id = ?").run(JSON.stringify(resultsForStorage), analysisId)
+        db.prepare(
+            "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+        ).run(analysisId, req.user.id, "cover_letter", data.cover_letter_text || "", String(company || "").slice(0, 200))
+
+        res.json({ analysis_id: analysisId, cover_letter_text: data.cover_letter_text || "", results: resultsForStorage })
+    } catch (err) {
+        res.status(500).json({ error: "Cover letter generation failed. Please try again." })
+    }
+})
+
 router.get("/jobs/:jobId", authenticateToken, pollLimiter, (req, res) => {
     const db = getDb()
     const job = db.prepare("SELECT * FROM analysis_jobs WHERE id = ? AND user_id = ?").get(req.params.jobId, req.user.id)
@@ -203,7 +273,7 @@ router.post("/highlight", authenticateToken, pollLimiter, async (req, res) => {
 router.get("/history", authenticateToken, (req, res) => {
     const db = getDb()
     const rows = db.prepare(
-        "SELECT id, resume_id, score_total, provider, model, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
+        "SELECT id, resume_id, score_total, provider, model, attempt_type, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).all(req.user.id)
 
     res.json(rows.map(r => ({
@@ -212,6 +282,7 @@ router.get("/history", authenticateToken, (req, res) => {
         score: r.score_total,
         provider: r.provider,
         model: r.model,
+        attempt_type: r.attempt_type || "resume_analysis",
         created_at: r.created_at,
     })))
 })
@@ -222,10 +293,12 @@ router.get("/insights/overview", authenticateToken, (req, res) => {
     // the Insights view indexes this array assuming the LAST entry is the latest attempt
     // (see its "most improved section" comparison), so a plain "ORDER BY created_at ASC
     // LIMIT 50" would instead freeze on a user's *oldest* 50 attempts forever past that point
+    // cover-letter-only attempts were never scored/rewritten/keyword-matched - they have no
+    // trend data to contribute here and would otherwise show up as fake zero-score points
     const rows = db.prepare(`
         SELECT * FROM (
             SELECT id, resume_id, results_json, score_total, provider, model, created_at
-            FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
+            FROM analyses WHERE user_id = ? AND attempt_type != 'cover_letter_only' ORDER BY created_at DESC LIMIT 50
         ) ORDER BY created_at ASC
     `).all(req.user.id)
     const analyses = rows.map(row => {
@@ -267,6 +340,18 @@ router.get("/resumes", authenticateToken, (req, res) => {
     res.json(rows)
 })
 
+// self-service raw file fetch, so a candidate reopening a past attempt from Attempt History
+// can restore the exact resume file it was generated from (the live `file` state may
+// currently hold a different upload) - mirrors mentor.js's candidate-file route, minus the
+// PDF-only restriction since the caller here decides how to type/use the bytes
+router.get("/resumes/:resumeId/file", authenticateToken, (req, res) => {
+    const resume = getOwnedResume(req.params.resumeId, req.user.id)
+    if (!resume) return res.status(404).json({ error: "Resume not found." })
+    res.setHeader("Content-Type", "application/octet-stream")
+    res.setHeader("Content-Disposition", `attachment; filename="${resume.filename.replace(/[^a-zA-Z0-9._-]/g, "_")}"`)
+    res.send(resume.raw_bytes)
+})
+
 router.get("/resumes/:resumeId/history", authenticateToken, (req, res) => {
     if (!getOwnedResume(req.params.resumeId, req.user.id)) {
         return res.status(404).json({ error: "Resume not found." })
@@ -286,7 +371,7 @@ router.get("/:id", authenticateToken, (req, res) => {
 
     let results = {}
     try { results = JSON.parse(row.results_json) } catch {}
-    res.json({ id: row.id, resume_id: row.resume_id, score: row.score_total, provider: row.provider, model: row.model, created_at: row.created_at, results })
+    res.json({ id: row.id, resume_id: row.resume_id, score: row.score_total, provider: row.provider, model: row.model, attempt_type: row.attempt_type || "resume_analysis", created_at: row.created_at, results })
 })
 
 router.post("/:id/decisions", authenticateToken, (req, res) => {
