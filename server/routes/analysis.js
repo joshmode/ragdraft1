@@ -4,10 +4,11 @@ import crypto from "crypto"
 import fetch from "node-fetch"
 import { getDb } from "../db.js"
 import { authenticateToken } from "../middleware/auth.js"
-import { canAccessAnalysis, getOwnedAnalysis, getOwnedResume } from "../access.js"
+import { canAccessAnalysis, getOwnedAnalysis, getOwnedResume, mentorsForCandidate } from "../access.js"
 import { pollLimiter, llmLimiter } from "../middleware/rateLimit.js"
 import { fetchEngineWithRetry } from "../engineClient.js"
 import { resolveProviderForRequest, ProviderResolutionError } from "../userKeys.js"
+import { notifyMany } from "../notifications.js"
 
 const router = Router()
 const ANALYSIS_CACHE_TTL_MINUTES = parseInt(process.env.ANALYSIS_CACHE_TTL_MINUTES || "60", 10)
@@ -118,6 +119,7 @@ async function processAnalysis(engineUrl, jobId, payload) {
         db.prepare(
             "UPDATE analysis_jobs SET status = 'completed', analysis_id = ?, error = '', updated_at = datetime('now') WHERE id = ?"
         ).run(row.lastInsertRowid, jobId)
+        notifyMany(mentorsForCandidate(payload.user_id), { analysisId: row.lastInsertRowid, attemptType: "resume_analysis", eventType: "new_attempt" })
     } catch (err) {
         db.prepare(
             "UPDATE analysis_jobs SET status = 'failed', error = ?, updated_at = datetime('now') WHERE id = ?"
@@ -268,6 +270,7 @@ router.post("/quick-cover-letter", authenticateToken, llmLimiter, async (req, re
         db.prepare(
             "INSERT INTO generated_documents (analysis_id, user_id, document_type, content, company, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
         ).run(analysisId, req.user.id, "cover_letter", data.cover_letter_text || "", String(company || "").slice(0, 200))
+        notifyMany(mentorsForCandidate(req.user.id), { analysisId, attemptType: "cover_letter_only", eventType: "new_attempt" })
 
         res.json({ analysis_id: analysisId, cover_letter_text: data.cover_letter_text || "", results: resultsForStorage })
     } catch (err) {
@@ -381,18 +384,32 @@ router.post("/highlight", authenticateToken, pollLimiter, async (req, res) => {
 router.get("/history", authenticateToken, (req, res) => {
     const db = getDb()
     const rows = db.prepare(
-        "SELECT id, resume_id, score_total, provider, model, attempt_type, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
+        "SELECT id, resume_id, score_total, provider, model, attempt_type, results_json, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"
     ).all(req.user.id)
 
-    res.json(rows.map(r => ({
-        id: r.id,
-        resume_id: r.resume_id,
-        score: r.score_total,
-        provider: r.provider,
-        model: r.model,
-        attempt_type: r.attempt_type || "resume_analysis",
-        created_at: r.created_at,
-    })))
+    res.json(rows.map(r => {
+        // Cover Letter attempt metadata (company, Job Match Score, Keyword Match Score) all
+        // come from the same lightweight keyword-gap fields computeKeywordGapFields already
+        // stores in results_json - nothing new to compute, just surface it for the split
+        // Attempt History view's per-company grouping/numbering and metadata columns
+        let results = {}
+        try { results = JSON.parse(r.results_json) } catch {}
+        const keywords = results.jd_keywords || []
+        const missing = results.missing_keywords || []
+        const keywordMatchPct = keywords.length ? Math.round((keywords.length - missing.length) / keywords.length * 100) : null
+        return {
+            id: r.id,
+            resume_id: r.resume_id,
+            score: r.score_total,
+            provider: r.provider,
+            model: r.model,
+            attempt_type: r.attempt_type || "resume_analysis",
+            company: results.company || "",
+            job_match_pct: typeof results.match_pct === "number" ? results.match_pct : null,
+            keyword_match_pct: keywordMatchPct,
+            created_at: r.created_at,
+        }
+    }))
 })
 
 router.get("/insights/overview", authenticateToken, (req, res) => {

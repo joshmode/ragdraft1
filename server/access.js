@@ -35,3 +35,15 @@ export function mentorSessionForCandidate(mentorId, candidateId, { activeOnly = 
         LIMIT 1
     `).get(mentorId, candidateId)
 }
+
+// reverse of mentorSessionForCandidate: every mentor currently serving this candidate in an
+// active review session, so a candidate-side event (new attempt, new comment) can notify all
+// of them - a candidate could in principle be in more than one mentor's session
+export function mentorsForCandidate(candidateId) {
+    return getDb().prepare(`
+        SELECT DISTINCT rs.mentor_id
+        FROM review_sessions rs
+        JOIN session_participants sp ON sp.session_id = rs.id
+        WHERE sp.user_id = ? AND rs.active = 1
+    `).all(candidateId).map(r => r.mentor_id)
+}

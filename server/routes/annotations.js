@@ -1,7 +1,8 @@
 import { Router } from "express"
 import { getDb } from "../db.js"
 import { authenticateToken } from "../middleware/auth.js"
-import { canAccessAnalysis } from "../access.js"
+import { canAccessAnalysis, mentorsForCandidate } from "../access.js"
+import { notify, notifyMany } from "../notifications.js"
 
 const router = Router()
 
@@ -42,7 +43,8 @@ router.post("/", authenticateToken, (req, res) => {
         !analysisId || !suggestion_key || !comment.trim()) {
         return res.status(400).json({ error: "analysis_id, suggestion_key, and comment are required." })
     }
-    if (!canAccessAnalysis(analysisId, req.user)) {
+    const analysisRow = canAccessAnalysis(analysisId, req.user)
+    if (!analysisRow) {
         return res.status(404).json({ error: "Analysis not found." })
     }
 
@@ -51,6 +53,16 @@ router.post("/", authenticateToken, (req, res) => {
         "INSERT INTO annotations (analysis_id, user_id, suggestion_key, comment, section, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
     )
     const result = stmt.run(analysisId, req.user.id, suggestion_key, comment.trim(), typeof section === "string" ? section.slice(0, 100) : "")
+
+    // notify whichever side didn't post this - the candidate posting (a fresh question or a
+    // reply to a mentor) notifies every mentor serving them, a mentor's reply notifies the
+    // candidate who owns the thread
+    const attemptType = analysisRow.attempt_type || "resume_analysis"
+    if (req.user.role === "mentor") {
+        notify(analysisRow.user_id, { analysisId, attemptType, eventType: "discussion_reply" })
+    } else {
+        notifyMany(mentorsForCandidate(req.user.id), { analysisId, attemptType, eventType: "user_comment" })
+    }
 
     res.status(201).json({ id: result.lastInsertRowid, ok: true })
 })
